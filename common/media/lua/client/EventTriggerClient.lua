@@ -3,10 +3,61 @@
 -- Manages trigger CRUD, player detection, message scheduling, and UI
 -- ============================================================
 
+-- ============================================================
+-- Bootstrap order (IMPORTANT):
+--   1) Ensure EventTrigger / EventTrigger.Delivery globals exist BEFORE require,
+--      so EventTriggerDelivery.lua can safely attach to them.
+--   2) require dependencies.
+--   3) Install stubs for any missing Delivery methods, so that ANY caller
+--      (OnTick, context menu, UI buttons, server commands) never crashes
+--      when the delivery module is unavailable.
+-- ============================================================
+EventTrigger = EventTrigger or {}
+EventTrigger.Delivery = EventTrigger.Delivery or {}
+
 require "ISUI/ISTextBox"
 require "EventTriggerDelivery"
 
-EventTrigger = EventTrigger or {}
+do
+    -- Methods that should exist on EventTrigger.Delivery when the module loaded.
+    local expectedMethods = {
+        "CheckPlayerInRange", "StartSetup", "EditDelivery", "DeleteDelivery",
+        "ResetDelivery", "ShowHistory", "OnDeliveryResult",
+        "CloseAllUIs", "Validate", "Execute", "MatchItem", "CountItems",
+    }
+
+    -- Stub return values so callers that expect (ok, msg) don't crash on nil.
+    local stubFactories = {
+        Validate   = function() return false, "Delivery module not loaded" end,
+        Execute    = function() return false, "Delivery module not loaded" end,
+        MatchItem  = function() return false end,
+        CountItems = function() return {} end,
+    }
+
+    local missing = {}
+    for _, name in ipairs(expectedMethods) do
+        if type(EventTrigger.Delivery[name]) ~= "function" then
+            local factory = stubFactories[name]
+            if factory then
+                EventTrigger.Delivery[name] = factory
+            else
+                EventTrigger.Delivery[name] = function() end
+            end
+            missing[#missing + 1] = name
+        end
+    end
+
+    -- State tables consumed across the module.
+    EventTrigger.Delivery._activePrompt = EventTrigger.Delivery._activePrompt or {}
+    EventTrigger.Delivery._pendingDpId  = EventTrigger.Delivery._pendingDpId  or {}
+
+    -- Single, prominent warning if the module did not load.
+    EventTrigger.DeliveryLoaded = (#missing == 0)
+    if #missing > 0 then
+        print("[EventTrigger-CLIENT] EventTriggerDelivery NOT loaded. Stubbed: " .. table.concat(missing, ", "))
+        print("[EventTrigger-CLIENT] >>> Check that EventTriggerDelivery.lua ships with the client mod and is reachable via require()")
+    end
+end
 
 EventTrigger.triggers = EventTrigger.triggers or {}
 EventTrigger.deliveryPoints = EventTrigger.deliveryPoints or {}
@@ -626,12 +677,12 @@ function EventTrigger.OnServerCommand(module, command, args)
             })
         end
     elseif command == "deliveryResult" then
+        -- Delivery stub guarantees OnDeliveryResult exists, so no guard needed here.
         local player = getPlayer()
         if args and player then
             local success = (args.action == "completed")
             local msg = args.message or args.reason or ""
-            local rewardItems = args.rewardItems
-            EventTrigger.Delivery.OnDeliveryResult(player, success, msg, rewardItems)
+            EventTrigger.Delivery.OnDeliveryResult(player, success, msg, args.rewardItems)
         end
     end
 end
@@ -1070,7 +1121,7 @@ function EventTrigger.OnTick()
             end
         end
 
-        -- Delivery point detection (delegated to EventTriggerDelivery module)
+        -- Delivery point detection (delegated to EventTriggerDelivery module; safe even if stubbed)
         EventTrigger.Delivery.CheckPlayerInRange(player)
         idx = idx + 1
     end
@@ -1107,10 +1158,13 @@ function EventTrigger.OnFillWorldObjectContextMenu(playerIndex, context, worldOb
         context:addOption(txt, nil, function()
             EventTrigger.PromptDelayRange(x, y, z)
         end)
-        local dlvTxt = string.format("Set Delivery Point (%d,%d,%d)", x, y, z)
-        context:addOption(dlvTxt, nil, function()
-            EventTrigger.Delivery.StartSetup(x, y, z)
-        end)
+        -- Only offer delivery placement when the delivery module is actually available.
+        if EventTrigger.DeliveryLoaded then
+            local dlvTxt = string.format("Set Delivery Point (%d,%d,%d)", x, y, z)
+            context:addOption(dlvTxt, nil, function()
+                EventTrigger.Delivery.StartSetup(x, y, z)
+            end)
+        end
     end
 
     if hasTool then
@@ -1607,12 +1661,16 @@ function EventTriggerUI:create()
     self.addBtn:initialise()
     self:addChild(self.addBtn)
 
-    -- "Set Delivery Point" button
+    -- "Set Delivery Point" button — disabled when delivery module failed to load.
     local dlvDef = layout.addDelivery or { x = 140, w = 100, h = 24 }
     self.addDeliveryBtn = ISButton:new(
         dlvDef.x, footer.y, dlvDef.w, dlvDef.h,
         dlvDef.text or "Set Delivery Pt", self, EventTriggerUI.onAddDelivery)
     self.addDeliveryBtn:initialise()
+    if not EventTrigger.DeliveryLoaded then
+        self.addDeliveryBtn:setEnable(false)
+        self.addDeliveryBtn:setTitle("Delivery (unavailable)")
+    end
     self:addChild(self.addDeliveryBtn)
 
     local delDef = layout.deleteAll or { x = 374, w = 130, h = 24 }
@@ -2270,6 +2328,10 @@ end
 -- EventTriggerUI delivery integration (delegated to EventTriggerDelivery)
 -- ============================================================
 function EventTriggerUI:onAddDelivery()
+    if not EventTrigger.DeliveryLoaded then
+        dbg("onAddDelivery: delivery module not loaded, ignoring")
+        return
+    end
     local player = getPlayer()
     if not player then return end
     local x, y, z = player:getX(), player:getY(), player:getZ()
