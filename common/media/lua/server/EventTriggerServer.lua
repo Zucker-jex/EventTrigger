@@ -1,0 +1,4 @@
+-- OBSOLETE: EventTrigger server logic moved to EventTrigger/Server.lua
+-- IMPORTANT: do NOT set EventTriggerServer_loaded here. If this file loads
+-- before EventTrigger/Server.lua, the guard there would skip both full
+-- implementations and the server-side logic would silently never run.

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<EventTriggerLayout version="2.0">
+    <window x="0" y="0" w="900" h="480"/>
+    <titleBar height="28">
+        <label name="title" x="450" y="7" w="0" h="0" text="EventTrigger Manager" center="true"/>
+        <button name="close" x="875" y="4" w="21" h="21" text="X"/>
+    </titleBar>
+    <header y="32" height="18">
+        <col name="index"     x="8"   w="28"  text="#"/>
+        <col name="position"  x="40"  w="115" text="Position"/>
+        <col name="message"   x="159" w="220" text="Message"/>
+        <col name="detail"    x="383" w="170" text="Delay/Range/Output"/>
+        <col name="triggered" x="610" w="90"  text="Triggered"/>
+        <col name="actions"   x="724" w="120" text="Actions"/>
+    </header>
+    <list x="8" y="52" w="864" h="356"/>
+    <footer y="445" height="24">
+        <button name="addDelivery" x="140" w="120" h="24" text="Set Delivery Pt"/>
+        <button name="add"           x="270" w="130" h="24" text="Add Trigger"/>
+        <button name="deleteAll"     x="408" w="120" h="24" text="Delete All"/>
+        <button name="refresh"       x="536" w="80"  h="24" text="Refresh"/>
+    </footer>
+    <row height="28" buttonH="20">
+        <button name="edit"    w="36" text="Edit"/>
+        <button name="delete"  w="22" text="X"/>
+        <button name="reset"   w="22" text="R"/>
+        <button name="history" w="46" text="Hist"/>
+    </row>
+</EventTriggerLayout>
