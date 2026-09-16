@@ -42,6 +42,8 @@ EventTriggerShared.COMMANDS = {
     EDIT_MESSAGE      = "editTriggerMessage",
     EDIT_PARAMS       = "editTriggerParams",
     EDIT_OUTPUT       = "editTriggerOutput",
+    TOGGLE_TRIGGER    = "toggleTrigger",
+    DISABLE_ALL       = "disableAll",
 
     -- Trigger recording (client -> server)
     RECORD_TRIGGER    = "recordTrigger",
@@ -57,6 +59,7 @@ EventTriggerShared.COMMANDS = {
     DELETE_ALL_DELIVERY = "deleteAllDeliveryPoints",
     EDIT_DELIVERY     = "editDelivery",
     RESET_DELIVERY    = "resetDelivery",
+    TOGGLE_DELIVERY   = "toggleDelivery",
 
     -- Delivery transaction (client -> server)
     REQUEST_DELIVERY  = "requestDelivery",
@@ -205,6 +208,7 @@ EventTriggerShared.makeTrigger = function(args)
         outputName  = tostring(args.outputName or ""):sub(1, 100),
         maxTriggers = args.maxTriggers or -1,
         triggerCount = args.triggerCount or 0,
+        enabled     = args.enabled ~= false,
         cooldown    = EventTriggerShared.makeCooldown(args.cooldown or args),
         lastTriggerAt = args.lastTriggerAt,
         creator     = tostring(args.creator or "unknown"),
@@ -278,6 +282,7 @@ EventTriggerShared.makeDeliveryPoint = function(args)
         playerCooldowns  = args.playerCooldowns or {},   -- playerId -> last delivery timestamp (seconds)
         triggerCount  = args.triggerCount or 0,
         triggeredBy   = args.triggeredBy or {},
+        enabled       = args.enabled ~= false,
         creator       = tostring(args.creator or "unknown"),
         createdAt     = args.createdAt or os.time(),
     }

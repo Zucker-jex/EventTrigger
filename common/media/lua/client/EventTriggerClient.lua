@@ -453,6 +453,7 @@ function EventTrigger.RebuildList()
             t.outputName = td.outputName or t.outputName
             t.maxTriggers = td.maxTriggers or t.maxTriggers
             t.creator = td.creator or t.creator
+            t.enabled = td.enabled ~= false
             -- Update coordinates (retain compatibility)
             t.x = td.x
             t.y = td.y
@@ -474,6 +475,7 @@ function EventTrigger.RebuildList()
                 triggeredBy = restoredHistory,
                 cooldown = EventTrigger.makeCooldown(td.cooldown or td),
                 lastTriggerAt = td.lastTriggerAt,
+                enabled = td.enabled ~= false,
                 inRangePlayers = {},
                 creator = td.creator or "unknown",
             })
@@ -550,6 +552,7 @@ function EventTrigger.ExecuteLocal(command, args)
             outputName = args.outputName or "",
             maxTriggers = args.maxTriggers or -1,
             cooldown = EventTrigger.makeCooldown(args.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
+            enabled = true,
             creator = args.creator or GetPlayerIdentifier(getPlayer()),
         }
         if not EventTrigger.WriteToSquare(x, y, z, sqData) then
@@ -567,6 +570,7 @@ function EventTrigger.ExecuteLocal(command, args)
                 outputName = sqData.outputName,
                 maxTriggers = sqData.maxTriggers,
                 cooldown = sqData.cooldown,
+                enabled = true,
                 triggerCount = 0,
                 triggeredBy = {},
                 inRangePlayers = {},
@@ -598,6 +602,29 @@ function EventTrigger.ExecuteLocal(command, args)
             EventTrigger._saveToModData()
             if EventTrigger._ui then EventTrigger._ui:refreshList() end
         end
+
+    elseif command == "toggleTrigger" then
+        local idx = args.index
+        if idx and idx >= 1 and idx <= #EventTrigger.triggers then
+            local t = EventTrigger.triggers[idx]
+            if args.enabled ~= nil then t.enabled = args.enabled and true or false end
+            EventTrigger.UpdateSquareTrigger(t.id, t.x, t.y, t.z, { enabled = t.enabled })
+            EventTrigger._saveToModData()
+            if EventTrigger._ui then EventTrigger._ui:refreshList() end
+        end
+
+    elseif command == "disableAll" then
+        for _, t in ipairs(EventTrigger.triggers) do
+            t.enabled = false
+            EventTrigger.UpdateSquareTrigger(t.id, t.x, t.y, t.z, { enabled = false })
+        end
+        for _, dp in ipairs(EventTrigger.deliveryPoints or {}) do
+            if dp and dp.type == "delivery" then
+                dp.enabled = false
+            end
+        end
+        EventTrigger._saveToModData()
+        if EventTrigger._ui then EventTrigger._ui:refreshList() end
 
     elseif command == "deleteAllTriggers" then
         if args.all then
@@ -756,6 +783,7 @@ function EventTrigger.OnServerCommand(module, command, args)
                     triggeredBy = src.triggeredBy or {},
                     cooldown = EventTrigger.makeCooldown(src.cooldown or src),
                     lastTriggerAt = src.lastTriggerAt,
+                    enabled = src.enabled ~= false,
                     inRangePlayers = oldInRange[src.id] or {},
                     creator     = src.creator or "unknown",
                 }
@@ -790,6 +818,7 @@ function EventTrigger.OnServerCommand(module, command, args)
                         cooldown      = EventTrigger.makeCooldown(src.cooldown or src),
                         playerDeliveries = src.playerDeliveries or {},
                         playerCooldowns  = src.playerCooldowns or {},
+                        enabled       = src.enabled ~= false,
                         creator       = src.creator or "unknown",
                         createdAt     = src.createdAt or os.time(),
                         triggerCount  = src.triggerCount or 0,
@@ -930,6 +959,7 @@ function EventTrigger.Load()
                     cooldown      = EventTrigger.makeCooldown(dp.cooldown or dp),
                     playerDeliveries = dp.playerDeliveries or {},
                     playerCooldowns  = dp.playerCooldowns or {},
+                    enabled       = dp.enabled ~= false,
                     creator       = dp.creator or "unknown",
                     createdAt     = dp.createdAt or os.time(),
                     triggerCount  = dp.triggerCount or 0,
@@ -1232,7 +1262,7 @@ function EventTrigger.OnTick()
             local dx, dy = px - trigger.x, py - trigger.y
             local dist = math.sqrt(dx*dx + dy*dy)
             local inRange = (pz == trigger.z) and (dist < (trigger.range or 2))
-            if inRange then
+            if inRange and trigger.enabled ~= false then
                 if not trigger.inRangePlayers[playerKey] then
                     local exhausted = trigger.maxTriggers > 0 and (trigger.triggerCount or 0) >= trigger.maxTriggers
                     local cooldownReady = EventTrigger.isTriggerCooldownReady(trigger)
@@ -2180,6 +2210,21 @@ function EventTrigger.DeleteAllTriggers(all)
     EventTrigger.SendCommand("deleteAllTriggers", { all = all })
 end
 
+-- UI shortcut: toggle a trigger enabled/disabled
+function EventTrigger.ToggleTrigger(index)
+    local t = EventTrigger.triggers[index]
+    EventTrigger.SendCommand("toggleTrigger", {
+        index = index,
+        id = t and t.id,
+        enabled = not (t.enabled ~= false),
+    })
+end
+
+-- UI shortcut: disable all triggers + delivery points
+function EventTrigger.DisableAll()
+    EventTrigger.SendCommand("disableAll", { all = true })
+end
+
 -- ============================================================
 -- Edit wizard (ISTextBox multi-step input)
 -- Step 1: Edit message text
@@ -2461,6 +2506,7 @@ function EventTriggerUI:create()
         self.addDeliveryBtn:setTitle("Delivery (unavailable)")
     end
     self.addBtn = placeBtn("Add Trigger", EventTriggerUI.onAdd)
+    self.disableAllBtn = placeBtn("Disable All", EventTriggerUI.onDisableAll)
     self.delAllBtn = placeBtn("Delete All", EventTriggerUI.onDeleteAll)
     self.refreshBtn = placeBtn("Refresh", EventTriggerUI.onRefresh)
     self.showAllBtn = placeBtn("Show All", EventTriggerUI.onToggleView)
@@ -2694,8 +2740,10 @@ function EventTriggerUI:addRow(entry)
         return btn
     end
 
+    local enabled = (t.enabled ~= false)
     addActionBtn("Edit", EventTriggerUI.onEditRow)
     addActionBtn("X", EventTriggerUI.onDeleteRow)
+    addActionBtn(enabled and "Disable" or "Enable", EventTriggerUI.onToggleRow)
     addActionBtn("R", EventTriggerUI.onResetRow)
     addActionBtn("Hist", EventTriggerUI.onHistoryRow)
 end
@@ -2773,6 +2821,19 @@ function EventTriggerUI:onResetRow(btn)
     EventTrigger.ResetTrigger(btn.idx)
 end
 
+-- Button callback: toggle row trigger/delivery enabled state
+function EventTriggerUI:onToggleRow(btn)
+    if btn.entry and btn.entry._isDelivery then
+        local dp = btn.entry.trigger
+        local dlvIdx = btn.entry._dlvIndex
+        if dp and dlvIdx then
+            EventTrigger.Delivery.ToggleDelivery(dlvIdx, dp)
+        end
+        return
+    end
+    EventTrigger.ToggleTrigger(btn.idx)
+end
+
 -- Button callback: view row trigger history / delivery details
 function EventTriggerUI:onHistoryRow(btn)
     if btn.entry and btn.entry._isDelivery then
@@ -2798,8 +2859,24 @@ function EventTriggerUI:onAdd()
 end
 
 -- Button callback: delete all triggers (admin+viewAll = all, otherwise own only)
+-- Requires typing YES (uppercase) to confirm the destructive action.
 function EventTriggerUI:onDeleteAll()
-    EventTrigger.DeleteAllTriggers(EventTrigger.IsAdmin() and self.viewAll)
+    local modal = EventTriggerTextPrompt:new(
+        "Delete All",
+        "This will delete ALL triggers and cannot be undone.\nType YES (uppercase) to confirm.",
+        "",
+        function(text)
+            if text == "YES" then
+                EventTrigger.DeleteAllTriggers(EventTrigger.IsAdmin() and self.viewAll)
+            end
+        end)
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+-- Button callback: disable all triggers + delivery points
+function EventTriggerUI:onDisableAll()
+    EventTrigger.DisableAll()
 end
 
 -- Button callback: manual refresh list

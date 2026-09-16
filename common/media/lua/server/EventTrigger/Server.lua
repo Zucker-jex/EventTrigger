@@ -310,6 +310,35 @@ Server.onClientCommand = function(module, command, player, args)
         return
     end
 
+    -- ---------- Toggle trigger enabled/disabled ----------
+    if command == Shared.COMMANDS.TOGGLE_TRIGGER then
+        local idx = findById(args.id)
+        if not idx and args.index then
+            idx = (args.index >= 1 and args.index <= #Server.triggers) and args.index or nil
+        end
+        if idx and canModify(player, Server.triggers[idx]) then
+            local t = Server.triggers[idx]
+            if args.enabled ~= nil then t.enabled = args.enabled and true or false end
+            saveOneTrigger(t)
+            Logger:info("Trigger toggled: id=%s enabled=%s by %s", t.id, tostring(t.enabled), pid)
+            broadcastAll()
+        end
+        return
+    end
+
+    -- ---------- Disable all triggers + delivery points ----------
+    if command == Shared.COMMANDS.DISABLE_ALL then
+        if isAdmin(player) then
+            for _, t in ipairs(Server.triggers) do t.enabled = false end
+            for _, dp in ipairs(Server.deliveryPoints) do dp.enabled = false end
+            saveTriggers()
+            Persistence.saveDeliveryPoints(Server.deliveryPoints)
+            Logger:info("DisableAll by %s", pid)
+            broadcastAll()
+        end
+        return
+    end
+
     -- ---------- Record trigger (client reports player entered range) ----------
     if command == Shared.COMMANDS.RECORD_TRIGGER then
         local idx = findById(args.id)
@@ -459,6 +488,21 @@ Server.onClientCommand = function(module, command, player, args)
                 dp.playerCooldowns = {}
                 Persistence.saveOneDeliveryPoint(dp)
                 Logger:info("Delivery reset: id=%s by %s", dp.id, pid)
+                broadcastAll()
+            end
+        end
+        return
+    end
+
+    -- ---------- Toggle delivery point enabled/disabled ----------
+    if command == Shared.COMMANDS.TOGGLE_DELIVERY then
+        local dpIdx = findDeliveryById(args.id)
+        if dpIdx then
+            local dp = Server.deliveryPoints[dpIdx]
+            if canModify(player, dp) then
+                if args.enabled ~= nil then dp.enabled = args.enabled and true or false end
+                Persistence.saveOneDeliveryPoint(dp)
+                Logger:info("Delivery toggled: id=%s enabled=%s by %s", dp.id, tostring(dp.enabled), pid)
                 broadcastAll()
             end
         end

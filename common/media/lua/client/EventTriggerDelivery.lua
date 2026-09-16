@@ -286,7 +286,7 @@ function EventTrigger.Delivery.CheckPlayerInRange(player)
     if not px then return end
 
     for _, dp in ipairs(EventTrigger.deliveryPoints or {}) do
-        if dp and dp.type == "delivery" then
+        if dp and dp.type == "delivery" and dp.enabled ~= false then
 
             local dx, dy = px - (dp.x or 0), py - (dp.y or 0)
             local dist = math.sqrt(dx*dx + dy*dy)
@@ -1807,6 +1807,7 @@ function EventTrigger.Delivery.PlacePending()
             rewardItems = p.rewardItems or {},
             playerDeliveries = {},
             playerCooldowns = {},
+            enabled = true,
             creator = EventTrigger.GetCurrentPlayerId(),
             createdAt = os.time(),
             triggerCount = 0,
@@ -1832,6 +1833,7 @@ function EventTrigger.Delivery.PlacePending()
             rewardItems = p.rewardItems or {},
             playerDeliveries = {},
             playerCooldowns = {},
+            enabled = true,
             creator = EventTrigger.GetCurrentPlayerId(),
             createdAt = os.time(),
             triggerCount = 0,
@@ -1904,6 +1906,20 @@ function EventTrigger.Delivery.ResetDelivery(dlvIdx, dp)
     if EventTrigger.IsMultiplayer() then
         sendClientCommand("EventTrigger", "resetDelivery", { id = dp.id })
     else
+        EventTrigger._saveToModData()
+    end
+    if EventTrigger._ui then EventTrigger._ui:refreshList() end
+end
+
+-- Toggle delivery point enabled/disabled
+function EventTrigger.Delivery.ToggleDelivery(dlvIdx, dp)
+    if not dp or not dp.id then return end
+    local enabled = not (dp.enabled ~= false)
+    if EventTrigger.IsMultiplayer() then
+        dp.enabled = enabled
+        sendClientCommand("EventTrigger", "toggleDelivery", { id = dp.id, enabled = enabled })
+    else
+        dp.enabled = enabled
         EventTrigger._saveToModData()
     end
     if EventTrigger._ui then EventTrigger._ui:refreshList() end
