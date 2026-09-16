@@ -15,6 +15,12 @@ local dbg = function(...)
     end
 end
 
+-- UTF-8 safe text fitting (defined in EventTriggerClient.lua; fall back to passthrough)
+local function fitText(text, font, maxWidth)
+    if EventTrigger.fitText then return EventTrigger.fitText(text, font, maxWidth) end
+    return tostring(text or "")
+end
+
 -- ============================================================
 -- Section 1: Dual Matching Algorithm (FullType + DisplayName)
 -- ============================================================
@@ -752,18 +758,30 @@ end
 function EventTriggerDeliveryItemSelectOR:create()
     self:setAlwaysOnTop(true)
 
-    local bw, bh = 120, 30
-    local gap = 20
+    local titleH = 28
+    local infoY = titleH + 8
+    local hasCooldown = (self.delivery.cooldownType or 0) > 0 and (self.delivery.cooldownValue or 0) > 0
+    local listStartY = infoY + 24
+    if hasCooldown then listStartY = listStartY + 20 end
+
+    self.infoY = infoY
+    self.listStartY = listStartY
+    self.rowH = 32
+    self.itemX = 24
+    self.radioSize = 18
+
+    -- Bottom buttons (spaced, centered)
+    local bw, bh = 120, 32
+    local gap = 24
+    local btnY = self.height - bh - 18
     local totalW = bw * 2 + gap
-    local btnY = self.height - 50
     local confX = (self.width - totalW) / 2
-    local cancX = confX + bw + gap
 
     self.confirmBtn = ISButton:new(confX, btnY, bw, bh, "Confirm", self, EventTriggerDeliveryItemSelectOR.onConfirm)
     self.confirmBtn:initialise()
     self:addChild(self.confirmBtn)
 
-    self.cancelBtn = ISButton:new(cancX, btnY, bw, bh, "Cancel", self, EventTriggerDeliveryItemSelectOR.onCancel)
+    self.cancelBtn = ISButton:new(confX + bw + gap, btnY, bw, bh, "Cancel", self, EventTriggerDeliveryItemSelectOR.onCancel)
     self.cancelBtn:initialise()
     self:addChild(self.cancelBtn)
 
@@ -771,7 +789,6 @@ function EventTriggerDeliveryItemSelectOR:create()
     self.closeBtn:initialise()
     self:addChild(self.closeBtn)
 
-    self.itemY = 36
     self.selectedItemIndex = nil
 
     -- Find matching items in player inventory
@@ -862,17 +879,6 @@ function EventTriggerDeliveryItemSelectOR:close()
     self:removeFromUIManager()
 end
 
-function EventTriggerDeliveryItemSelectOR:onMouseDown(x, y)
-    if y >= 0 and y < 28 then
-        self.dragging = true
-        self.dragOfsX = getMouseX() - self.x
-        self.dragOfsY = getMouseY() - self.y
-        self:setCapture(true)
-        return true
-    end
-    return ISPanel.onMouseDown(self, x, y)
-end
-
 function EventTriggerDeliveryItemSelectOR:onMouseMove(x, y)
     if self.dragging then
         self:setX(getMouseX() - self.dragOfsX)
@@ -898,76 +904,64 @@ function EventTriggerDeliveryItemSelectOR:prerender()
     local delivery = self.delivery
     if not delivery then return end
 
-    local midX = self.width / 2
-    local leftX = 10
-    local y = self.itemY
+    -- Single info line (replaces redundant "Match Mode" + "Required items" headers)
+    self:drawText("Choose the item to consume:", 24, self.infoY, 0.8, 0.8, 0.8, 1, UIFont.Small)
 
-    -- Show match mode info
-    local modeText = "Match Mode: " .. (delivery.matchMode == "any" and "ANY (OR logic)" or "ALL (AND logic)")
-    self:drawText(modeText, leftX, y, 0.9, 0.9, 0.3, 1, UIFont.Small)
-    y = y + 22
-    
-    if delivery.cooldownType and delivery.cooldownType > 0 and delivery.cooldownValue > 0 then
+    local hasCooldown = (delivery.cooldownType or 0) > 0 and (delivery.cooldownValue or 0) > 0
+    if hasCooldown then
         local cdText = "Cooldown: " .. (delivery.cooldownType == 1 and "Game Time" or "Real Time") .. " " .. delivery.cooldownValue .. " min"
-        self:drawText(cdText, leftX, y, 0.7, 0.9, 0.7, 1, UIFont.Small)
-        y = y + 22
+        self:drawText(cdText, 24, self.infoY + 20, 0.7, 0.9, 0.7, 1, UIFont.Small)
     end
 
-    -- Required items (with checkboxes for selection)
-    self:drawText("--- Required Items (select one) ---", leftX, y, 0.9, 0.7, 0.3, 1, UIFont.Small)
-    y = y + 20
+    -- Divider above item list
+    self:drawRect(24, self.listStartY - 6, self.width - 48, 1, 0.35, 0.35, 0.35, 0.35)
+
     local reqItems = delivery.requiredItems or {}
-    
     if #reqItems == 0 then
-        self:drawText("(none)", leftX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
+        self:drawText("(no items to select)", 40, self.listStartY + 4, 0.5, 0.5, 0.5, 1, UIFont.Small)
     else
         for idx, req in ipairs(reqItems) do
-            -- Check if player has this item
+            local iy = self.listStartY + (idx - 1) * self.rowH
+
             local hasItem = false
             for _, mi in ipairs(self.matchingItems or {}) do
-                if mi.req == req then
-                    hasItem = true
-                    break
-                end
+                if mi.req == req then hasItem = true; break end
             end
-            
-            local collectStr = (req.collect ~= false) and " (collect)" or " (check only)"
-            local txt = req.displayName .. "  x" .. tostring(req.count) .. collectStr .. (hasItem and " [AVAILABLE]" or " [MISSING]")
-            local color = hasItem and {1, 1, 1} or {0.7, 0.3, 0.3}
-            
-            -- Draw selection indicator
-            if idx == self.selectedItemIndex then
-                self:drawRect(leftX + 4, y + 2, 16, 16, 0.8, 0.2, 0.8, 0.2)
-                self:drawRectBorder(leftX + 4, y + 2, 16, 16, 1, 1, 0.5, 0.5)
-            else
-                self:drawRectBorder(leftX + 4, y + 2, 16, 16, 0.5, 0.5, 0.5, 0.5)
+
+            local selected = (idx == self.selectedItemIndex)
+            if selected then
+                self:drawRect(24, iy, self.width - 48, self.rowH - 2, 0.3, 0.25, 0.1, 0.3)
             end
-            
-            self:drawText(txt, leftX + 24, y, color[1], color[2], color[3], 1, UIFont.Small)
-            y = y + 22
-            if y > self.height - 70 then break end
+
+            -- Radio circle (vertically centered within the row)
+            local cy = iy + (self.rowH - self.radioSize) / 2
+            self:drawRectBorder(self.itemX, cy, self.radioSize, self.radioSize, 0.8, 0.8, 0.8, 0.8)
+            if selected then
+                self:drawRect(self.itemX + 4, cy + 4, self.radioSize - 8, self.radioSize - 8, 1, 0.3, 0.9, 0.3)
+            end
+
+            -- Item name x count (fitted so it never overlaps the tag)
+            local txt = fitText((req.displayName or "?") .. "  x" .. tostring(req.count), UIFont.Small, self.width - 200)
+            local color = hasItem and {1, 1, 1} or {0.85, 0.4, 0.4}
+            self:drawText(txt, self.itemX + self.radioSize + 12, iy + 8, color[1], color[2], color[3], 1, UIFont.Small)
+
+            -- Availability tag, right-aligned (clear of item text)
+            local tag = hasItem and "[OK]" or "[MISSING]"
+            local tagColor = hasItem and {0.4, 0.9, 0.5} or {0.9, 0.4, 0.4}
+            self:drawTextRight(tag, self.width - 24, iy + 8, tagColor[1], tagColor[2], tagColor[3], 1, UIFont.Small)
         end
     end
 
-    -- Right: Reward Items
-    y = self.itemY
-    local rightX = midX + 10
-    self:drawText("--- Reward Items ---", rightX, y, 0.3, 0.9, 0.5, 1, UIFont.Small)
-    y = y + 20
+    -- Reward summary (single line above the buttons)
     local rewItems = delivery.rewardItems or {}
-    if #rewItems == 0 then
-        self:drawText("(none)", rightX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
-    else
-        for _, rew in ipairs(rewItems) do
-            local txt = rew.displayName .. "  x" .. tostring(rew.count)
-            self:drawText(txt, rightX + 8, y, 1, 1, 1, 1, UIFont.Small)
-            y = y + 18
-            if y > self.height - 70 then break end
-        end
+    local rewStr = ""
+    for i, rew in ipairs(rewItems) do
+        if i > 1 then rewStr = rewStr .. ", " end
+        rewStr = rewStr .. (rew.displayName or "?") .. " x" .. tostring(rew.count)
     end
-
-    -- Vertical divider
-    self:drawRect(midX, self.itemY, 1, self.height - self.itemY - 60, 0.4, 0.4, 0.4, 0.4)
+    if rewStr == "" then rewStr = "(none)" end
+    local rewLine = fitText("Rewards: " .. rewStr, UIFont.Small, self.width - 48)
+    self:drawText(rewLine, 24, self.height - 64, 0.4, 0.9, 0.5, 1, UIFont.Small)
 end
 
 function EventTriggerDeliveryItemSelectOR:onMouseDown(x, y)
@@ -978,30 +972,24 @@ function EventTriggerDeliveryItemSelectOR:onMouseDown(x, y)
         self:setCapture(true)
         return true
     end
-    
-    -- Check for item selection clicks (start Y must match prerender layout)
-    local leftX = 10
-    local startY = self.itemY + 42
-    if self.delivery.cooldownType and self.delivery.cooldownType > 0 and self.delivery.cooldownValue > 0 then
-        startY = startY + 22
-    end
-    local reqItems = self.delivery.requiredItems or {}
 
-    for idx, req in ipairs(reqItems) do
-        local itemY = startY + (idx - 1) * 22
-        if y >= itemY and y <= itemY + 20 and x >= leftX and x <= leftX + 20 then
+    -- Click anywhere on an item row selects it (matches prerender row layout)
+    local reqItems = self.delivery.requiredItems or {}
+    for idx = 1, #reqItems do
+        local iy = self.listStartY + (idx - 1) * self.rowH
+        if y >= iy and y < iy + self.rowH then
             self.selectedItemIndex = idx
             return true
         end
     end
-    
+
     return ISPanel.onMouseDown(self, x, y)
 end
 
 function EventTriggerDeliveryItemSelectOR:new(player, delivery)
     local sw = getCore():getScreenWidth()
     local sh = getCore():getScreenHeight()
-    local w, h = 500, 400
+    local w, h = 560, 460
     local x, y = (sw - w) / 2, (sh - h) / 2
 
     local o = ISPanel:new(x, y, w, h)
@@ -1271,13 +1259,13 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
     local mode = EventTrigger.Delivery._selectionMode or "required"
     local itemList = (p and mode == "required") and p.requiredItems or ((p and mode == "reward") and p.rewardItems or {})
 
-    local x = 10
+    local x = 12
     local w = self.leftW
-    local startY = self.contentY + 4
-    local colX = x
+    local startY = self.contentY + 6
+    local headingH = 22
 
     -- Heading
-    local titleStr = "Inventory (Pg " .. (self.leftPage + 1) .. "/" .. self.totalPages .. ")"
+    local titleStr = "Inventory  (Pg " .. (self.leftPage + 1) .. "/" .. self.totalPages .. ")"
     local heading = ISLabel:new(x, startY, 20, titleStr, 0.55, 0.8, 1, 1, UIFont.Small, true)
     heading:initialise()
     self:addChild(heading)
@@ -1296,7 +1284,7 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
         table.insert(self.rowChildren, nextBtn)
     end
 
-    local rowStartY = startY + 24
+    local rowStartY = startY + headingH + 6
     local startIdx = self.leftPage * self.rowsPerPage
     local endIdx = math.min(#self.inventoryData - 1, startIdx + self.rowsPerPage - 1)
 
@@ -1315,44 +1303,40 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
             end
         end
 
-        -- Row background
-        local bg = found and {0.1, 0.12, 0.06} or {0.07, 0.07, 0.07}
-        self:drawRect(x, y, w, self.rowH - 2, 0.2, bg[1], bg[2], bg[3])
+        -- Right button strip width (keeps text clear of buttons)
+        local btnStripW = found and 114 or 68
+        local textW = w - btnStripW - 16
 
-        -- DisplayName
-        local name = data.displayName or "?"
-        if #name > 18 then name = name:sub(1, 15) .. ".." end
-        local lbl = ISLabel:new(x + 4, y + 2, 18, name, 1, 1, 1, 1, UIFont.Small, true)
+        -- DisplayName (top)
+        local name = fitText(data.displayName or "?", UIFont.Small, textW)
+        local lbl = ISLabel:new(x + 4, y + 4, 18, name, 1, 1, 1, 1, UIFont.Small, true)
         lbl:initialise()
         self:addChild(lbl)
         table.insert(self.rowChildren, lbl)
 
-        -- FullType (dimmer, below name)
-        local ft = data.fullType or "?"
-        if #ft > 22 then ft = ft:sub(1, 19) .. ".." end
-        local ftLbl = ISLabel:new(x + 4, y + 20, 18, "[" .. ft .. "]", 0.4, 0.45, 0.6, 1, UIFont.Small, true)
+        -- FullType (bottom, dimmer)
+        local ft = fitText("[" .. (data.fullType or "?") .. "]", UIFont.Small, textW)
+        local ftLbl = ISLabel:new(x + 4, y + 24, 18, ft, 0.45, 0.5, 0.65, 1, UIFont.Small, true)
         ftLbl:initialise()
         self:addChild(ftLbl)
         table.insert(self.rowChildren, ftLbl)
 
-        -- Action button (right-aligned in left column)
-        local btnX = x + w - 60
-        local btnY = y + 8
-
+        -- Action button (right-aligned, vertically centered)
+        local btnY = y + 10
         if found then
-            local qtyBtn = ISButton:new(btnX, btnY, 26, 20, "Q", self, EventTriggerDeliveryItemSelect.onQtyItem)
+            local qtyBtn = ISButton:new(x + w - btnStripW - 6, btnY, 46, 24, "Qty", self, EventTriggerDeliveryItemSelect.onQtyItem)
             qtyBtn:initialise()
             qtyBtn.itemFullType = data.fullType
             self:addChild(qtyBtn)
             table.insert(self.rowChildren, qtyBtn)
 
-            local remBtn = ISButton:new(btnX + 30, btnY, 26, 20, "X", self, EventTriggerDeliveryItemSelect.onRemoveItem)
+            local remBtn = ISButton:new(x + w - btnStripW + 44, btnY, 60, 24, "Remove", self, EventTriggerDeliveryItemSelect.onRemoveItem)
             remBtn:initialise()
             remBtn.itemFullType = data.fullType
             self:addChild(remBtn)
             table.insert(self.rowChildren, remBtn)
         else
-            local addBtn = ISButton:new(btnX, btnY, 56, 20, "Add", self, EventTriggerDeliveryItemSelect.onAddItem)
+            local addBtn = ISButton:new(x + w - btnStripW - 6, btnY, btnStripW, 24, "Add", self, EventTriggerDeliveryItemSelect.onAddItem)
             addBtn:initialise()
             addBtn.itemFullType = data.fullType
             addBtn.itemDisplayName = data.displayName
@@ -1362,7 +1346,7 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
     end
 
     if #self.inventoryData == 0 then
-        local emptyLbl = ISLabel:new(x + 4, startY + 28, 18, "(inventory empty)", 0.5, 0.5, 0.5, 1, UIFont.Small, true)
+        local emptyLbl = ISLabel:new(x + 4, rowStartY + 8, 18, "(inventory empty)", 0.5, 0.5, 0.5, 1, UIFont.Small, true)
         emptyLbl:initialise()
         self:addChild(emptyLbl)
         table.insert(self.rowChildren, emptyLbl)
@@ -1409,10 +1393,11 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
     if self.rightPage < 0 then self.rightPage = 0 end
 
     local x = self.midX + 8
-    local startY = self.contentY + 4
+    local startY = self.contentY + 6
+    local headingH = 22
 
     -- Heading
-    local titleStr = "Selected (Pg " .. (self.rightPage + 1) .. "/" .. selTotal .. ")"
+    local titleStr = "Selected  (Pg " .. (self.rightPage + 1) .. "/" .. selTotal .. ")"
     local heading = ISLabel:new(x, startY, 20, titleStr, 0.85, 0.85, 0.5, 1, UIFont.Small, true)
     heading:initialise()
     self:addChild(heading)
@@ -1432,14 +1417,14 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
     end
 
     if #itemList == 0 then
-        local noneLbl = ISLabel:new(x + 4, startY + 28, 18, "(none selected)", 0.45, 0.45, 0.45, 1, UIFont.Small, true)
+        local noneLbl = ISLabel:new(x + 4, startY + headingH + 8, 18, "(none selected)", 0.45, 0.45, 0.45, 1, UIFont.Small, true)
         noneLbl:initialise()
         self:addChild(noneLbl)
         table.insert(self.selectedChildren, noneLbl)
         return
     end
 
-    local rowStartY = startY + 24
+    local rowStartY = startY + headingH + 6
     local startIdx = self.rightPage * self.rowsPerPage
     local endIdx = math.min(#itemList - 1, startIdx + self.rowsPerPage - 1)
 
@@ -1450,37 +1435,42 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
 
         local r = i - startIdx
         local y = rowStartY + r * self.rowH
+        local itemIdx = i + 1
+        local isRequired = (mode == "required")
+        local btnAreaW = 112
 
-        -- Row background
-        self:drawRect(x, y, self.rightW, self.rowH - 2, 0.2, 0.08, 0.06, 0.04)
-
-        -- Item name + count
-        local txt = (si.displayName or "?") .. "  x" .. tostring(si.count)
-        if #txt > 20 then txt = txt:sub(1, 17) .. ".." end
-        local lbl = ISLabel:new(x + 4, y + 2, 18, txt, 1, 1, 0.85, 1, UIFont.Small, true)
+        -- Top row: item name x count (left) + Qty/Remove buttons (right)
+        local textW = self.rightW - btnAreaW - 20
+        local txt = fitText((si.displayName or "?") .. "  x" .. tostring(si.count), UIFont.Small, textW)
+        local lbl = ISLabel:new(x + 4, y + 4, 18, txt, 1, 1, 0.85, 1, UIFont.Small, true)
         lbl:initialise()
         self:addChild(lbl)
         table.insert(self.selectedChildren, lbl)
 
-        -- FullType (dimmer line)
-        local ft = si.fullType or "?"
-        if #ft > 22 then ft = ft:sub(1, 19) .. ".." end
-        local ftLbl = ISLabel:new(x + 4, y + 20, 18, "[" .. ft .. "]", 0.4, 0.45, 0.6, 1, UIFont.Small, true)
+        local qtyBtn = ISButton:new(x + self.rightW - btnAreaW - 6, y + 4, 46, 24, "Qty", self, EventTriggerDeliveryItemSelect.onEditQty)
+        qtyBtn:initialise()
+        qtyBtn.itemIndex = itemIdx
+        self:addChild(qtyBtn)
+        table.insert(self.selectedChildren, qtyBtn)
+
+        local delBtn = ISButton:new(x + self.rightW - btnAreaW + 44, y + 4, 60, 24, "Remove", self, EventTriggerDeliveryItemSelect.onDelItem)
+        delBtn:initialise()
+        delBtn.itemIndex = itemIdx
+        self:addChild(delBtn)
+        table.insert(self.selectedChildren, delBtn)
+
+        -- Bottom row: FullType (left) + Collect checkbox (right, required only)
+        local ftW = isRequired and (self.rightW - 150) or (self.rightW - 20)
+        local ft = fitText("[" .. (si.fullType or "?") .. "]", UIFont.Small, ftW)
+        local ftLbl = ISLabel:new(x + 4, y + 24, 18, ft, 0.45, 0.5, 0.65, 1, UIFont.Small, true)
         ftLbl:initialise()
         self:addChild(ftLbl)
         table.insert(self.selectedChildren, ftLbl)
 
-        -- Collect checkbox (only for required items)
-        if mode == "required" then
+        if isRequired then
             local collect = si.collect ~= false
-            local cbX = x + 4
-            local cbY = y + 8
-            local collectLbl = ISLabel:new(cbX + 20, cbY, 18, "Collect", 0.7, 0.9, 0.7, 1, UIFont.Small, true)
-            collectLbl:initialise()
-            self:addChild(collectLbl)
-            table.insert(self.selectedChildren, collectLbl)
-
-            local itemIdx = i + 1
+            local cbX = x + self.rightW - 130
+            local cbY = y + 26
             local collectCB = ISTickBox:new(cbX, cbY, 18, 18, "", self, function()
                 EventTriggerDeliveryItemSelect.onToggleCollect(self, itemIdx)
             end)
@@ -1489,23 +1479,12 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
             collectCB.selected[1] = collect
             self:addChild(collectCB)
             table.insert(self.selectedChildren, collectCB)
+
+            local collectLbl = ISLabel:new(cbX + 22, cbY, 18, "Collect", 0.7, 0.9, 0.7, 1, UIFont.Small, true)
+            collectLbl:initialise()
+            self:addChild(collectLbl)
+            table.insert(self.selectedChildren, collectLbl)
         end
-
-        -- Buttons on right — Qty and X with gap
-        local btnX = x + self.rightW - 62
-        local btnY = y + 8
-
-        local qtyBtn = ISButton:new(btnX, btnY, 26, 20, "Q", self, EventTriggerDeliveryItemSelect.onEditQty)
-        qtyBtn:initialise()
-        qtyBtn.itemIndex = i + 1
-        self:addChild(qtyBtn)
-        table.insert(self.selectedChildren, qtyBtn)
-
-        local delBtn = ISButton:new(btnX + 32, btnY, 26, 20, "X", self, EventTriggerDeliveryItemSelect.onDelItem)
-        delBtn:initialise()
-        delBtn.itemIndex = i + 1
-        self:addChild(delBtn)
-        table.insert(self.selectedChildren, delBtn)
     end
 end
 

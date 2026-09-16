@@ -1,31 +1,33 @@
 <?xml version="1.0" encoding="ISO-8859-1"?>
+<!-- NOTE: layout is now defined solely in EventTriggerClient.lua DefaultLayout(). -->
+<!-- This file is kept for reference/documentation only and is not loaded at runtime. -->
 <EventTriggerLayout version="2.0">
-    <window x="0" y="0" w="960" h="520"/>
+    <window x="0" y="0" w="1020" h="560"/>
     <titleBar height="28">
-        <label name="title" x="480" y="7" w="0" h="0" text="EventTrigger Manager" center="true"/>
-        <button name="close" x="935" y="4" w="21" h="21" text="X"/>
+        <label name="title" x="510" y="7" w="0" h="0" text="EventTrigger Manager" center="true"/>
+        <button name="close" x="995" y="4" w="21" h="21" text="X"/>
     </titleBar>
-    <header y="32" height="18">
-        <col name="index"     x="8"   w="24"  text="#"/>
-        <col name="position"  x="36"  w="110" text="Position"/>
-        <col name="message"   x="150" w="210" text="Message"/>
-        <col name="detail"    x="364" w="160" text="Delay/Range/Output"/>
-        <col name="creator"   x="578" w="100" text="Creator"/>
-        <col name="triggered" x="682" w="90"  text="Triggered"/>
-        <col name="actions"   x="786" w="138" text="Actions"/>
+    <header y="34" height="18">
+        <col name="index"     x="10"  w="40"  text="#"/>
+        <col name="position"  x="54"  w="150" text="Position"/>
+        <col name="message"   x="208" w="250" text="Message"/>
+        <col name="detail"    x="462" w="200" text="Delay/Range/Output"/>
+        <col name="creator"   x="666" w="100" text="Creator"/>
+        <col name="triggered" x="770" w="84"  text="Triggered"/>
+        <col name="actions"   x="858" w="152" text="Actions"/>
     </header>
-    <list x="8" y="52" w="944" h="396"/>
-    <footer y="485" height="24">
-        <button name="addDelivery" x="146" w="126" h="24" text="Set Delivery Pt"/>
-        <button name="add"         x="280" w="130" h="24" text="Add Trigger"/>
-        <button name="deleteAll"   x="418" w="130" h="24" text="Delete All"/>
-        <button name="refresh"     x="556" w="80"  h="24" text="Refresh"/>
-        <button name="showAll"     x="644" w="100" h="24" text="Show All"/>
+    <list x="10" y="54" w="1000" h="440"/>
+    <footer y="505" height="30">
+        <button name="addDelivery" x="12"  w="126" h="28" text="Set Delivery Pt"/>
+        <button name="add"         x="146" w="110" h="28" text="Add Trigger"/>
+        <button name="deleteAll"   x="264" w="100" h="28" text="Delete All"/>
+        <button name="refresh"     x="372" w="70"  h="28" text="Refresh"/>
+        <button name="showAll"     x="450" w="90"  h="28" text="Show All"/>
     </footer>
-    <row height="28" buttonH="20">
-        <button name="edit"    w="46" text="Edit"/>
-        <button name="delete"  w="22" text="X"/>
-        <button name="reset"   w="22" text="R"/>
-        <button name="history" w="46" text="Hist"/>
+    <row height="30" buttonH="22">
+        <button name="edit"    w="40" text="Edit"/>
+        <button name="delete"  w="24" text="X"/>
+        <button name="reset"   w="24" text="R"/>
+        <button name="history" w="40" text="Hist"/>
     </row>
 </EventTriggerLayout>

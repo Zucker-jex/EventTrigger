@@ -76,6 +76,27 @@ local function dbg(...)
     end
 end
 
+-- UTF-8 safe text fitting: trim text to fit within maxWidth pixels (appends "...")
+-- Iterates UTF-8 characters (not bytes) so CJK text is never split mid-codepoint.
+function EventTrigger.fitText(text, font, maxWidth)
+    text = tostring(text or "")
+    if not maxWidth or maxWidth <= 0 then return text end
+    local tm = getTextManager()
+    if not tm then return text end
+    if tm:MeasureStringX(font, text) <= maxWidth then return text end
+
+    local ellipsis = "..."
+    local avail = maxWidth - tm:MeasureStringX(font, ellipsis)
+    if avail <= 0 then return ellipsis end
+
+    local out = ""
+    for ch in text:gmatch("[^\128-\191][\128-\191]*") do
+        if tm:MeasureStringX(font, out .. ch) > avail then break end
+        out = out .. ch
+    end
+    return out .. ellipsis
+end
+
 -- Trigger message output mode enum (corresponds to MongooseChat channels)
 EventTrigger.OutputType = {
     NAMED = 1,  -- Named + system channel (blue)
@@ -1580,176 +1601,42 @@ local LAYOUT = nil
 -- Default hardcoded layout (XML fallback)
 local function DefaultLayout()
     return {
-        window = { x = 0, y = 0, w = 960, h = 520 },
+        window = { x = 0, y = 0, w = 1020, h = 560 },
         titleBar = { height = 28 },
-        close = { type = "button", x = 935, y = 4, w = 21, h = 21, text = "X" },
-        title = { type = "label", x = 480, y = 7, w = 0, h = 0, text = "EventTrigger Manager", center = true },
-        header = { y = 32, height = 18 },
+        close = { type = "button", x = 995, y = 4, w = 21, h = 21, text = "X" },
+        title = { type = "label", x = 510, y = 7, w = 0, h = 0, text = "EventTrigger Manager", center = true },
+        header = { y = 34, height = 18 },
         headerCols = {
-            { name = "index",     x = 8,   w = 24,  text = "#" },
-            { name = "position",  x = 36,  w = 110, text = "Position" },
-            { name = "message",   x = 150, w = 210, text = "Message" },
-            { name = "detail",    x = 364, w = 160, text = "Delay/Range/Output" },
-            { name = "creator",   x = 578, w = 100, text = "Creator" },
-            { name = "triggered", x = 682, w = 90,  text = "Triggered" },
-            { name = "actions",   x = 786, w = 138, text = "Actions" },
+            { name = "index",     x = 10,  w = 40,  text = "#" },
+            { name = "position",  x = 54,  w = 150, text = "Position" },
+            { name = "message",   x = 208, w = 250, text = "Message" },
+            { name = "detail",    x = 462, w = 200, text = "Delay/Range/Output" },
+            { name = "creator",   x = 666, w = 100, text = "Creator" },
+            { name = "triggered", x = 770, w = 84,  text = "Triggered" },
+            { name = "actions",   x = 858, w = 152, text = "Actions" },
         },
-        list = { x = 8, y = 52, w = 944, h = 396 },
-        footer = { y = 485, height = 24 },
-        add = { type = "button", x = 280, w = 130, h = 24, text = "Add Trigger" },
-        addDelivery = { type = "button", x = 146, w = 126, h = 24, text = "Set Delivery Pt" },
-        deleteAll = { type = "button", x = 418, w = 130, h = 24, text = "Delete All" },
-        refresh = { type = "button", x = 556, w = 80, h = 24, text = "Refresh" },
-        showAll = { type = "button", x = 644, w = 100, h = 24, text = "Show All" },
-        row = { height = 28, buttonH = 20 },
+        list = { x = 10, y = 54, w = 1000, h = 440 },
+        footer = { y = 505, height = 30 },
+        add = { type = "button", x = 146, w = 110, h = 28, text = "Add Trigger" },
+        addDelivery = { type = "button", x = 12, w = 126, h = 28, text = "Set Delivery Pt" },
+        deleteAll = { type = "button", x = 264, w = 100, h = 28, text = "Delete All" },
+        refresh = { type = "button", x = 372, w = 70, h = 28, text = "Refresh" },
+        showAll = { type = "button", x = 450, w = 90, h = 28, text = "Show All" },
+        row = { height = 30, buttonH = 22 },
         rowBtns = {
-            edit = { w = 46, text = "Edit" },
-            delete = { w = 22, text = "X" },
-            reset = { w = 22, text = "R" },
-            history = { w = 46, text = "Hist" },
+            edit = { w = 40, text = "Edit" },
+            delete = { w = 24, text = "X" },
+            reset = { w = 24, text = "R" },
+            history = { w = 40, text = "Hist" },
         },
     }
 end
 
--- Load XML layout file (wrapped in pcall, won't crash on malformed XML)
+-- Load layout: DefaultLayout() is the single source of truth.
+-- (XML parsing removed so the layout file can never drift out of sync with code.)
 local function LoadLayout()
     if LAYOUT then return LAYOUT end
-
-    local ok, xml = pcall(getXML, "media/ui/EventTriggerLayout.xml")
-    if not ok or not xml then
-        LAYOUT = DefaultLayout()
-        return LAYOUT
-    end
-
-    local ok2, root = pcall(function() return xml:getDocumentElement() end)
-    if not ok2 or not root then
-        LAYOUT = DefaultLayout()
-        return LAYOUT
-    end
-
-    LAYOUT = {}
-
-    -- Safely read XML attribute (returns specified type or default)
-    local function ga(e, attr, def)
-        local ok3, v = pcall(function() return e:getAttribute(attr) end)
-        if not ok3 or not v or #v == 0 then return def end
-        local n = tonumber(v)
-        if n then return n end
-        return v
-    end
-
-    local ok4, cc = pcall(function() return root:getChildCount() end)
-    if not ok4 then
-        LAYOUT = DefaultLayout()
-        return LAYOUT
-    end
-
-    -- Parse XML nodes: window / titleBar / header / list / footer / row
-    for i = 0, cc - 1 do
-        local ok5, child = pcall(function() return root:getChildByIndex(i) end)
-        if not ok5 or not child then break end
-        local ok6, tag = pcall(function() return child:getTagName() end)
-        if not ok6 then break end
-
-        if tag == "window" then
-            LAYOUT.window = {
-                x = ga(child, "x", 0), y = ga(child, "y", 0),
-                w = ga(child, "w", 960), h = ga(child, "h", 520),
-            }
-        elseif tag == "titleBar" then
-            LAYOUT.titleBar = { height = ga(child, "height", 28) }
-            local ok7, tcc = pcall(function() return child:getChildCount() end)
-            if ok7 then
-                for j = 0, tcc - 1 do
-                    local ok8, sub = pcall(function() return child:getChildByIndex(j) end)
-                    if not ok8 or not sub then break end
-                    local ok9, st = pcall(function() return sub:getTagName() end)
-                    if not ok9 then break end
-                    local name = ga(sub, "name", "")
-                    if st == "button" then
-                        LAYOUT[name] = {
-                            type = "button",
-                            x = ga(sub, "x", 0), y = ga(sub, "y", 0),
-                            w = ga(sub, "w", 0), h = ga(sub, "h", 0),
-                            text = ga(sub, "text", ""),
-                        }
-                    elseif st == "label" then
-                        LAYOUT[name] = {
-                            type = "label",
-                            x = ga(sub, "x", 0), y = ga(sub, "y", 0),
-                            w = ga(sub, "w", 0), h = ga(sub, "h", 0),
-                            text = ga(sub, "text", ""),
-                            center = ga(sub, "center", "false") == "true",
-                        }
-                    end
-                end
-            end
-        elseif tag == "header" then
-            LAYOUT.header = { y = ga(child, "y", 32), height = ga(child, "height", 18) }
-            LAYOUT.headerCols = {}
-            local ok10, hcc = pcall(function() return child:getChildCount() end)
-            if ok10 then
-                for j = 0, hcc - 1 do
-                    local ok11, sub = pcall(function() return child:getChildByIndex(j) end)
-                    if not ok11 or not sub then break end
-                    local ok12, stag = pcall(function() return sub:getTagName() end)
-                    if not ok12 then break end
-                    if stag == "col" then
-                        table.insert(LAYOUT.headerCols, {
-                            name = ga(sub, "name", ""),
-                            x = ga(sub, "x", 0),
-                            w = ga(sub, "w", 0),
-                            text = ga(sub, "text", ""),
-                        })
-                    end
-                end
-            end
-        elseif tag == "list" then
-            LAYOUT.list = {
-                x = ga(child, "x", 8), y = ga(child, "y", 52),
-                w = ga(child, "w", 944), h = ga(child, "h", 396),
-            }
-        elseif tag == "footer" then
-            LAYOUT.footer = { y = ga(child, "y", 485), height = ga(child, "height", 24) }
-            local ok13, fcc = pcall(function() return child:getChildCount() end)
-            if ok13 then
-                for j = 0, fcc - 1 do
-                    local ok14, sub = pcall(function() return child:getChildByIndex(j) end)
-                    if not ok14 or not sub then break end
-                    local ok15, stag = pcall(function() return sub:getTagName() end)
-                    if not ok15 then break end
-                    if stag == "button" then
-                        local name = ga(sub, "name", "")
-                        LAYOUT[name] = {
-                            type = "button",
-                            x = ga(sub, "x", 0), y = LAYOUT.footer.y,
-                            w = ga(sub, "w", 0), h = ga(sub, "h", 0),
-                            text = ga(sub, "text", ""),
-                        }
-                    end
-                end
-            end
-        elseif tag == "row" then
-            LAYOUT.row = { height = ga(child, "height", 28), buttonH = ga(child, "buttonH", 20) }
-            LAYOUT.rowBtns = {}
-            local ok16, rcc = pcall(function() return child:getChildCount() end)
-            if ok16 then
-                for j = 0, rcc - 1 do
-                    local ok17, sub = pcall(function() return child:getChildByIndex(j) end)
-                    if not ok17 or not sub then break end
-                    local ok18, stag = pcall(function() return sub:getTagName() end)
-                    if not ok18 then break end
-                    if stag == "button" then
-                        local name = ga(sub, "name", "")
-                        LAYOUT.rowBtns[name] = {
-                            w = ga(sub, "w", 36),
-                            text = ga(sub, "text", ""),
-                        }
-                    end
-                end
-            end
-        end
-    end
+    LAYOUT = DefaultLayout()
     return LAYOUT
 end
 
@@ -1853,13 +1740,13 @@ function EventTriggerUI:create()
     self.showAllBtn:setVisible(EventTrigger.IsMultiplayer() and EventTrigger.IsAdmin())
     self:addChild(self.showAllBtn)
 
-    -- Pagination buttons
-    local pgX = self:getWidth() - 120
-    self.prevPageBtn = ISButton:new(pgX, footer.y, 24, 24, "<", self, EventTriggerUI.onPrevPage)
+    -- Pagination buttons (right-aligned in footer, clear of action buttons)
+    local pgX = self:getWidth() - 62
+    self.prevPageBtn = ISButton:new(pgX, footer.y, 24, 28, "<", self, EventTriggerUI.onPrevPage)
     self.prevPageBtn:initialise()
     self:addChild(self.prevPageBtn)
 
-    self.nextPageBtn = ISButton:new(pgX + 28, footer.y, 24, 24, ">", self, EventTriggerUI.onNextPage)
+    self.nextPageBtn = ISButton:new(pgX + 28, footer.y, 24, 28, ">", self, EventTriggerUI.onNextPage)
     self.nextPageBtn:initialise()
     self:addChild(self.nextPageBtn)
 
@@ -2002,14 +1889,15 @@ function EventTriggerUI:addRow(entry)
         local reqCount = t.requiredItems and #t.requiredItems or 0
         local rewCount = t.rewardItems and #t.rewardItems or 0
 
+        local F = UIFont.Small
         self.rowData[index] = {
             y = y,
             cols = {
-                { x = colIndex.x,     w = colIndex.w,   text = "[D]" .. tostring(index) .. ".",  color = {0.8,0.5,1} },
-                { x = colPos.x + 4,   w = colPos.w,    text = string.format("(%d,%d,%d)", t.x, t.y, t.z), color = {0.5,0.8,1} },
-                { x = colMsg.x + 4,   w = colMsg.w,    text = (#(t.hintText or "") > 28) and (t.hintText:sub(1,25) .. "...") or (t.hintText or "DP"), color = {0.8,0.8,1} },
-                { x = colDet.x + 4,   w = colDet.w,    text = "R=" .. string.format("%.1f", t.range or 3) .. "  Req:" .. reqCount .. "  Rew:" .. rewCount, color = {0.7,0.7,1} },
-                { x = colCreat.x + 4, w = colCreat.w,  text = t.creator or "?", color = {0.8,0.8,0.5} },
+                { x = colIndex.x + 4, w = colIndex.w,   text = "[D]" .. tostring(index) .. ".",  color = {0.8,0.5,1} },
+                { x = colPos.x + 4,   w = colPos.w,    text = EventTrigger.fitText(string.format("(%d,%d,%d)", t.x, t.y, t.z), F, colPos.w - 12), color = {0.5,0.8,1} },
+                { x = colMsg.x + 4,   w = colMsg.w,    text = EventTrigger.fitText(t.hintText or "DP", F, colMsg.w - 12), color = {0.8,0.8,1} },
+                { x = colDet.x + 4,   w = colDet.w,    text = EventTrigger.fitText("R=" .. string.format("%.1f", t.range or 3) .. "  Req:" .. reqCount .. "  Rew:" .. rewCount, F, colDet.w - 12), color = {0.7,0.7,1} },
+                { x = colCreat.x + 4, w = colCreat.w,  text = EventTrigger.fitText(t.creator or "?", F, colCreat.w - 12), color = {0.8,0.8,0.5} },
             },
             _isDelivery = true,
             _bgColor = bgColor,
@@ -2018,20 +1906,21 @@ function EventTriggerUI:addRow(entry)
         local cntStr = completed and "DONE" or "READY"
         local cntColor = completed and {0.5,1,0.5} or {1,1,0.3}
         self.rowData[index].cols[#self.rowData[index].cols + 1] = {
-            x = colTrig.x + 4, w = colTrig.w, text = cntStr, color = cntColor,
+            x = colTrig.x + 4, w = colTrig.w, text = EventTrigger.fitText(cntStr, F, colTrig.w - 12), color = cntColor,
         }
     else
         -- Regular trigger row
         local exhausted = t.maxTriggers > 0 and (t.triggerCount or 0) >= t.maxTriggers
 
+        local F = UIFont.Small
         self.rowData[index] = {
             y = y,
             cols = {
-                { x = colIndex.x,     w = colIndex.w,   text = tostring(index) .. ".",              color = {1,1,1} },
-                { x = colPos.x + 4,   w = colPos.w,    text = string.format("(%d,%d,%d)", t.x, t.y, t.z), color = {0.5,0.8,1} },
-                { x = colMsg.x + 4,   w = colMsg.w,    text = (#(t.message or "") > 30) and (t.message:sub(1,27) .. "...") or (t.message or ""), color = {1,1,1} },
-                { x = colDet.x + 4,   w = colDet.w,    text = OutputTypeToName(t.outputType) .. "  D=" .. (t.delay or 3) .. " R=" .. string.format("%.1f", t.range or 2), color = {0.7,0.7,1} },
-                { x = colCreat.x + 4, w = colCreat.w,  text = t.creator or "?", color = {0.8,0.8,0.5} },
+                { x = colIndex.x + 4, w = colIndex.w,   text = tostring(index) .. ".",              color = {1,1,1} },
+                { x = colPos.x + 4,   w = colPos.w,    text = EventTrigger.fitText(string.format("(%d,%d,%d)", t.x, t.y, t.z), F, colPos.w - 12), color = {0.5,0.8,1} },
+                { x = colMsg.x + 4,   w = colMsg.w,    text = EventTrigger.fitText(t.message or "", F, colMsg.w - 12), color = {1,1,1} },
+                { x = colDet.x + 4,   w = colDet.w,    text = EventTrigger.fitText(OutputTypeToName(t.outputType) .. "  D=" .. (t.delay or 3) .. " R=" .. string.format("%.1f", t.range or 2), F, colDet.w - 12), color = {0.7,0.7,1} },
+                { x = colCreat.x + 4, w = colCreat.w,  text = EventTrigger.fitText(t.creator or "?", F, colCreat.w - 12), color = {0.8,0.8,0.5} },
             },
             _bgColor = bgColor,
         }
@@ -2048,11 +1937,11 @@ function EventTriggerUI:addRow(entry)
         end
         local cntColor = exhausted and {1,0.5,0.5} or {0.8,1,0.7}
         self.rowData[index].cols[#self.rowData[index].cols + 1] = {
-            x = colTrig.x + 4, w = colTrig.w, text = cntStr .. who, color = cntColor,
+            x = colTrig.x + 4, w = colTrig.w, text = EventTrigger.fitText(cntStr .. who, F, colTrig.w - 12), color = cntColor,
         }
     end
 
-    local bx = colActs.x + 20
+    local bx = colActs.x + 2
 
     local editDef = rowBtns.edit or { w = 36 }
     local editBtn = ISButton:new(bx, y + 4, editDef.w, rowDef.buttonH,
@@ -2254,6 +2143,7 @@ function EventTriggerUI:prerender()
     local header = layout.header or { y = 32, height = 18 }
     local headerCols = layout.headerCols or {}
     local listArea = layout.list or { x = 8, y = 52, w = 944, h = 396 }
+    local footer = layout.footer or { y = 505, height = 30 }
 
     self:drawRectBorder(0, 0, self.width, win.h, 0.8, 0.4, 0.4, 0.4)
     self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
@@ -2265,7 +2155,7 @@ function EventTriggerUI:prerender()
     self:drawRect(8, divY, self:getWidth() - 30, 1, 0.7, 0.4, 0.4, 0.4)
 
     for _, col in ipairs(headerCols) do
-        self:drawText(col.text, col.x + 4, header.y + 1, 0.5, 0.5, 0.5, 1, UIFont.Small)
+        self:drawText(EventTrigger.fitText(col.text, UIFont.Small, col.w - 4), col.x + 4, header.y + 1, 0.5, 0.5, 0.5, 1, UIFont.Small)
     end
 
     local list = self:getFilteredTriggers()
@@ -2298,15 +2188,15 @@ function EventTriggerUI:prerender()
         self:drawTextCentre(txt, self.width / 2, self.listY + 20, 0.45, 0.45, 0.45, 1, UIFont.Small)
     end
 
-    -- Pagination indicator (only when content spans multiple pages)
+    -- Pagination indicator (left of the pagination buttons in footer)
     if total > rpp then
         local pgText = string.format("Page %d/%d", self.pageNum + 1, tp)
-        self:drawTextRight(pgText, self:getWidth() - 130, 452, 0.6, 0.6, 0.6, 1, UIFont.Small)
+        self:drawText(pgText, 560, footer.y + 8, 0.6, 0.6, 0.6, 1, UIFont.Small)
     end
 
-    -- Top-right mode indicator (Server/Local)
+    -- Mode indicator in title bar (left side, clear of close button)
     local modeText = EventTrigger.IsMultiplayer() and "Server" or "Local"
-    self:drawTextRight("Mode: " .. modeText, self:getWidth() - 10, 8, 0.4, 0.4, 0.4, 1, UIFont.Small)
+    self:drawText("Mode: " .. modeText, 12, 8, 0.5, 0.5, 0.5, 1, UIFont.Small)
 end
 
 -- EventTriggerUI constructor: create centered main management panel
