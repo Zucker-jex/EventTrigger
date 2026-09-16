@@ -1,11 +1,4 @@
 module EventTrigger
 {
-    item EventTriggerTool
-    {
-        DisplayCategory = Tool,
-        ItemType = base:normal,
-        Weight = 0.3,
-        Icon = Radio,
-        Tooltip = Right-click on ground to place trigger points,
-    }
+    -- No items required: the EventTrigger manager is admin-only via the right-click menu.
 }

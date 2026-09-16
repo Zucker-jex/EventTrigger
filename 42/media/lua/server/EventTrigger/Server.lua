@@ -187,6 +187,7 @@ Server.onClientCommand = function(module, command, player, args)
             outputType  = args.outputType,
             outputName  = args.outputName,
             maxTriggers = args.maxTriggers,
+            cooldown    = args.cooldown,
             creator     = pid,
         })
         Server.triggers[#Server.triggers + 1] = trigger
@@ -221,6 +222,7 @@ Server.onClientCommand = function(module, command, player, args)
         if idx and canModify(player, Server.triggers[idx]) then
             local t = Server.triggers[idx]
             t.triggerCount = 0
+            t.lastTriggerAt = nil
             saveOneTrigger(t)
             -- Clear history file, write empty list
             Persistence.saveHistory(t.id, {})
@@ -280,6 +282,7 @@ Server.onClientCommand = function(module, command, player, args)
             if args.delay ~= nil then t.delay = math.max(0, args.delay) end
             if args.range ~= nil then t.range = math.max(0.5, args.range) end
             if args.maxTriggers ~= nil then t.maxTriggers = args.maxTriggers end
+            if args.cooldown ~= nil then t.cooldown = Shared.makeCooldown(args.cooldown) end
             saveOneTrigger(t)
             Logger:info("Trigger params edited: id=%s by %s", t.id, pid)
             broadcastAll()
@@ -316,7 +319,18 @@ Server.onClientCommand = function(module, command, player, args)
             if t.maxTriggers > 0 and t.triggerCount >= t.maxTriggers then
                 return
             end
+            -- Check trigger cooldown (global per-trigger)
+            local cd = t.cooldown or {}
+            if not Shared.isCooldownZero(cd) and t.lastTriggerAt then
+                local now = Shared.cooldownNowSeconds(cd.mode)
+                if (now - t.lastTriggerAt) < Shared.cooldownDurationSeconds(cd) then
+                    return  -- still cooling down
+                end
+            end
             t.triggerCount = (t.triggerCount or 0) + 1
+            if not Shared.isCooldownZero(cd) then
+                t.lastTriggerAt = Shared.cooldownNowSeconds(cd.mode)
+            end
             saveOneTrigger(t)
             -- Append history entry to separate JSON file
             local entry = Shared.makeHistoryEntry(
@@ -357,8 +371,7 @@ Server.onClientCommand = function(module, command, player, args)
             requiredItems = args.requiredItems or {},
             rewardItems   = args.rewardItems or {},
             matchMode     = args.matchMode or "all",
-            cooldownType  = args.cooldownType or 0,
-            cooldownValue = args.cooldownValue or 0,
+            cooldown      = args.cooldown,
             playerDeliveries = {},
             playerCooldowns = {},
             creator       = pid,
@@ -422,8 +435,7 @@ Server.onClientCommand = function(module, command, player, args)
                 if args.requiredItems ~= nil then dp.requiredItems = args.requiredItems end
                 if args.rewardItems ~= nil then dp.rewardItems = args.rewardItems end
                 if args.matchMode ~= nil then dp.matchMode = args.matchMode end
-                if args.cooldownType ~= nil then dp.cooldownType = args.cooldownType end
-                if args.cooldownValue ~= nil then dp.cooldownValue = args.cooldownValue end
+                if args.cooldown ~= nil then dp.cooldown = Shared.makeCooldown(args.cooldown) end
                 Persistence.saveOneDeliveryPoint(dp)
                 Logger:info("Delivery edited: id=%s by %s", dp.id, pid)
                 broadcastAll()
@@ -441,6 +453,7 @@ Server.onClientCommand = function(module, command, player, args)
                 dp.triggerCount = 0
                 dp.triggeredBy = {}
                 dp.playerDeliveries = {}
+                dp.playerCooldowns = {}
                 Persistence.saveOneDeliveryPoint(dp)
                 Logger:info("Delivery reset: id=%s by %s", dp.id, pid)
                 broadcastAll()
@@ -489,28 +502,19 @@ Server.onClientCommand = function(module, command, player, args)
 
         local pid = getPlayerId(player)
         local matchMode = dp.matchMode or "all"
-        local cooldownType = dp.cooldownType or 0
-        local cooldownValue = dp.cooldownValue or 0
+        local cooldown = dp.cooldown or {}
         local selectedORIndex = args.selectedORIndex
 
         -- Check cooldown
-        if cooldownType ~= 0 and cooldownValue > 0 then
+        if not Shared.isCooldownZero(cooldown) then
             dp.playerCooldowns = dp.playerCooldowns or {}
             local lastDelivery = dp.playerCooldowns[pid]
             if lastDelivery then
-                local now
-                if cooldownType == 1 then
-                    -- Game time (in minutes)
-                    now = getGameTime():getWorldAgeHours() * 60
-                else
-                    -- Real time (in minutes)
-                    now = os.time() / 60
-                end
-                local elapsed = now - lastDelivery
-                if elapsed < cooldownValue then
-                    local remaining = math.ceil(cooldownValue - elapsed)
+                local now = Shared.cooldownNowSeconds(cooldown.mode)
+                local total = Shared.cooldownDurationSeconds(cooldown)
+                if (now - lastDelivery) < total then
                     sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
-                        action = "failed", reason = string.format("Cooldown active! Wait %d more minutes.", remaining),
+                        action = "failed", reason = "Cooldown active! " .. Shared.formatCooldown(cooldown),
                     })
                     return
                 end
@@ -607,13 +611,9 @@ Server.onClientCommand = function(module, command, player, args)
         })
         
         -- Update cooldown timestamp
-        if cooldownType ~= 0 and cooldownValue > 0 then
+        if not Shared.isCooldownZero(cooldown) then
             dp.playerCooldowns = dp.playerCooldowns or {}
-            if cooldownType == 1 then
-                dp.playerCooldowns[pid] = getGameTime():getWorldAgeHours() * 60
-            else
-                dp.playerCooldowns[pid] = os.time() / 60
-            end
+            dp.playerCooldowns[pid] = Shared.cooldownNowSeconds(cooldown.mode)
         end
         
         Persistence.saveOneDeliveryPoint(dp)

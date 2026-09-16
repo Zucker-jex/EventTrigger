@@ -90,6 +90,8 @@ function Persistence.loadTriggers()
             trigger.maxTriggers    = trigger.maxTriggers or -1
             trigger.creator        = trigger.creator or "unknown"
             trigger.createdAt      = trigger.createdAt or os.time()
+            trigger.cooldown       = Shared.makeCooldown(trigger.cooldown or trigger)
+            if trigger.lastTriggerAt == nil then trigger.lastTriggerAt = nil end
             triggers[#triggers + 1] = trigger
         end
     end
@@ -224,6 +226,8 @@ function Persistence.loadDeliveryPoints()
             dp.requiredItems = dp.requiredItems or {}
             dp.rewardItems   = dp.rewardItems or {}
             dp.playerDeliveries = dp.playerDeliveries or {}
+            dp.cooldown      = Shared.makeCooldown(dp.cooldown or dp)
+            dp.playerCooldowns = dp.playerCooldowns or {}
             dp.triggerCount  = dp.triggerCount or 0
             dp.triggeredBy   = dp.triggeredBy or {}
             dp.creator       = dp.creator or "unknown"

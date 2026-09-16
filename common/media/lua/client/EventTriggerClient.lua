@@ -116,6 +116,100 @@ function EventTrigger.btnW(title)
     return getTextManager():MeasureStringX(UIFont.Small, title) + 10
 end
 
+-- ============================================================
+-- Cooldown helpers (wall clock vs game clock)
+-- ============================================================
+EventTrigger.COOLDOWN_NONE = 0  -- no cooldown
+EventTrigger.COOLDOWN_WALL = 1  -- real / wall clock (os.time seconds)
+EventTrigger.COOLDOWN_GAME = 2  -- in-game clock (world age seconds)
+
+local function clampInt(v)
+    v = tonumber(v)
+    if not v then return 0 end
+    v = math.floor(v)
+    if v < 0 then return 0 end
+    return v
+end
+
+function EventTrigger.makeCooldown(args)
+    args = args or {}
+    local src = (type(args.cooldown) == "table") and args.cooldown or args
+
+    local mode = tonumber(src.mode or src.cooldownMode)
+    local years   = clampInt(src.years or src.cooldownYears)
+    local months  = clampInt(src.months or src.cooldownMonths)
+    local days    = clampInt(src.days or src.cooldownDays)
+    local hours   = clampInt(src.hours or src.cooldownHours)
+    local minutes = clampInt(src.minutes or src.cooldownMinutes)
+
+    -- Legacy delivery fields: cooldownType (0=none,1=game,2=real) + cooldownValue (minutes)
+    local legacyType = tonumber(src.cooldownType) or 0
+    local legacyValue = tonumber(src.cooldownValue) or 0
+    if legacyValue > 0 and years == 0 and months == 0 and days == 0 and hours == 0 and minutes == 0 then
+        minutes = clampInt(legacyValue)
+        if legacyType == 1 then mode = mode or EventTrigger.COOLDOWN_GAME end
+        if legacyType == 2 then mode = mode or EventTrigger.COOLDOWN_WALL end
+    end
+
+    if mode == nil then mode = EventTrigger.COOLDOWN_NONE end
+    if mode ~= EventTrigger.COOLDOWN_GAME and mode ~= EventTrigger.COOLDOWN_WALL then
+        mode = EventTrigger.COOLDOWN_NONE
+    end
+    if mode == EventTrigger.COOLDOWN_NONE then
+        return { mode = EventTrigger.COOLDOWN_NONE, years = 0, months = 0, days = 0, hours = 0, minutes = 0 }
+    end
+
+    return {
+        mode    = mode,
+        years   = years,
+        months  = months,
+        days    = days,
+        hours   = hours,
+        minutes = minutes,
+    }
+end
+
+function EventTrigger.isCooldownZero(cd)
+    cd = cd or {}
+    if cd.mode == EventTrigger.COOLDOWN_NONE then return true end
+    return (cd.years or 0) == 0 and (cd.months or 0) == 0 and (cd.days or 0) == 0
+        and (cd.hours or 0) == 0 and (cd.minutes or 0) == 0
+end
+
+function EventTrigger.cooldownDurationSeconds(cd)
+    cd = cd or {}
+    return ((((cd.years or 0) * 365 + (cd.months or 0) * 30 + (cd.days or 0)) * 24 + (cd.hours or 0)) * 60 + (cd.minutes or 0)) * 60
+end
+
+function EventTrigger.cooldownNowSeconds(mode)
+    if mode == EventTrigger.COOLDOWN_GAME then
+        return getGameTime():getWorldAgeHours() * 3600
+    end
+    return os.time()
+end
+
+function EventTrigger.formatCooldown(cd)
+    cd = cd or {}
+    if EventTrigger.isCooldownZero(cd) then return "None" end
+    local modeStr = (cd.mode == EventTrigger.COOLDOWN_GAME) and "Game Clock" or "Wall Clock"
+    local parts = {}
+    if (cd.years or 0) > 0 then parts[#parts + 1] = cd.years .. "y" end
+    if (cd.months or 0) > 0 then parts[#parts + 1] = cd.months .. "mo" end
+    if (cd.days or 0) > 0 then parts[#parts + 1] = cd.days .. "d" end
+    if (cd.hours or 0) > 0 then parts[#parts + 1] = cd.hours .. "h" end
+    if (cd.minutes or 0) > 0 then parts[#parts + 1] = cd.minutes .. "m" end
+    return modeStr .. " " .. table.concat(parts, " ")
+end
+
+-- True when a trigger is ready to fire (global cooldown elapsed).
+function EventTrigger.isTriggerCooldownReady(t)
+    local cd = t.cooldown or {}
+    if EventTrigger.isCooldownZero(cd) then return true end
+    if not t.lastTriggerAt then return true end
+    local now = EventTrigger.cooldownNowSeconds(cd.mode)
+    return (now - t.lastTriggerAt) >= EventTrigger.cooldownDurationSeconds(cd)
+end
+
 -- Trigger message output mode enum (corresponds to MongooseChat channels)
 EventTrigger.OutputType = {
     NAMED = 1,  -- Named + system channel (blue)
@@ -378,6 +472,8 @@ function EventTrigger.RebuildList()
                 maxTriggers = td.maxTriggers or -1,
                 triggerCount = restoredCount,
                 triggeredBy = restoredHistory,
+                cooldown = EventTrigger.makeCooldown(td.cooldown or td),
+                lastTriggerAt = td.lastTriggerAt,
                 inRangePlayers = {},
                 creator = td.creator or "unknown",
             })
@@ -453,6 +549,7 @@ function EventTrigger.ExecuteLocal(command, args)
             outputType = args.outputType or EventTrigger.OutputType.HALO,
             outputName = args.outputName or "",
             maxTriggers = args.maxTriggers or -1,
+            cooldown = EventTrigger.makeCooldown(args.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
             creator = args.creator or GetPlayerIdentifier(getPlayer()),
         }
         if not EventTrigger.WriteToSquare(x, y, z, sqData) then
@@ -469,6 +566,7 @@ function EventTrigger.ExecuteLocal(command, args)
                 outputType = sqData.outputType,
                 outputName = sqData.outputName,
                 maxTriggers = sqData.maxTriggers,
+                cooldown = sqData.cooldown,
                 triggerCount = 0,
                 triggeredBy = {},
                 inRangePlayers = {},
@@ -538,10 +636,12 @@ function EventTrigger.ExecuteLocal(command, args)
             if args.delay ~= nil then t.delay = math.max(0, args.delay or 0) end
             if args.range ~= nil then t.range = math.max(0.5, args.range or 2) end
             if args.maxTriggers ~= nil then t.maxTriggers = args.maxTriggers end
+            if args.cooldown ~= nil then t.cooldown = EventTrigger.makeCooldown(args.cooldown) end
             local partial = {}
             if args.delay ~= nil then partial.delay = t.delay end
             if args.range ~= nil then partial.range = t.range end
             if args.maxTriggers ~= nil then partial.maxTriggers = t.maxTriggers end
+            if args.cooldown ~= nil then partial.cooldown = t.cooldown end
             EventTrigger.UpdateSquareTrigger(t.id, t.x, t.y, t.z, partial)
             EventTrigger._saveToModData()
         end
@@ -571,6 +671,10 @@ function EventTrigger.ExecuteLocal(command, args)
                 timeStr = args.timeStr or "",
             })
             t.triggerCount = (t.triggerCount or 0) + 1
+            local cd = t.cooldown or {}
+            if not EventTrigger.isCooldownZero(cd) then
+                t.lastTriggerAt = EventTrigger.cooldownNowSeconds(cd.mode)
+            end
             -- Critical: sync write to square ModData (SP only)
             if not EventTrigger.IsMultiplayer() then
                 local recent = {}
@@ -650,6 +754,8 @@ function EventTrigger.OnServerCommand(module, command, args)
                     maxTriggers = src.maxTriggers or -1,
                     triggerCount = src.triggerCount or 0,
                     triggeredBy = src.triggeredBy or {},
+                    cooldown = EventTrigger.makeCooldown(src.cooldown or src),
+                    lastTriggerAt = src.lastTriggerAt,
                     inRangePlayers = oldInRange[src.id] or {},
                     creator     = src.creator or "unknown",
                 }
@@ -681,8 +787,7 @@ function EventTrigger.OnServerCommand(module, command, args)
                         requiredItems = src.requiredItems or {},
                         rewardItems   = src.rewardItems or {},
                         matchMode     = src.matchMode or "all",
-                        cooldownType  = src.cooldownType or 0,
-                        cooldownValue = src.cooldownValue or 0,
+                        cooldown      = EventTrigger.makeCooldown(src.cooldown or src),
                         playerDeliveries = src.playerDeliveries or {},
                         playerCooldowns  = src.playerCooldowns or {},
                         creator       = src.creator or "unknown",
@@ -822,8 +927,7 @@ function EventTrigger.Load()
                     requiredItems = dp.requiredItems or {},
                     rewardItems   = dp.rewardItems or {},
                     matchMode     = dp.matchMode or "all",
-                    cooldownType  = dp.cooldownType or 0,
-                    cooldownValue = dp.cooldownValue or 0,
+                    cooldown      = EventTrigger.makeCooldown(dp.cooldown or dp),
                     playerDeliveries = dp.playerDeliveries or {},
                     playerCooldowns  = dp.playerCooldowns or {},
                     creator       = dp.creator or "unknown",
@@ -870,21 +974,6 @@ function EventTrigger.RequestSync(all)
     else
         dbg("RequestSync: single player, no sync needed")
     end
-end
-
--- Check if player has EventTriggerTool in inventory or hands
-local function HasTool(player)
-    if not player then return false end
-    local inv = player:getInventory()
-    local items = inv:getItems()
-    for i = 0, items:size() - 1 do
-        if items:get(i):getType() == "EventTriggerTool" then return true end
-    end
-    local primary = player:getPrimaryHandItem()
-    if primary and primary:getType() == "EventTriggerTool" then return true end
-    local secondary = player:getSecondaryHandItem()
-    if secondary and secondary:getType() == "EventTriggerTool" then return true end
-    return false
 end
 
 -- Get player's readable name (prefer Steam username, fallback to character name)
@@ -1144,9 +1233,10 @@ function EventTrigger.OnTick()
             local dist = math.sqrt(dx*dx + dy*dy)
             local inRange = (pz == trigger.z) and (dist < (trigger.range or 2))
             if inRange then
-                    if not trigger.inRangePlayers[playerKey] then
+                if not trigger.inRangePlayers[playerKey] then
                     local exhausted = trigger.maxTriggers > 0 and (trigger.triggerCount or 0) >= trigger.maxTriggers
-                    if not exhausted then
+                    local cooldownReady = EventTrigger.isTriggerCooldownReady(trigger)
+                    if not exhausted and cooldownReady then
                         trigger.inRangePlayers[playerKey] = true
                         local ts, tsStr = EventTrigger.GetTimestamp()
                         EventTrigger.SendCommand("recordTrigger", {
@@ -1192,15 +1282,18 @@ function EventTrigger.OpenUI()
     EventTrigger._ui:addToUIManager()
 end
 
--- Right-click world object menu: place trigger + delivery point + manager entry (return early on test)
+-- Right-click world object menu: admin-only entries (place trigger + delivery point + manager)
 function EventTrigger.OnFillWorldObjectContextMenu(playerIndex, context, worldObjects, test)
     if test then return end
     local player = getSpecificPlayer(playerIndex)
     if not player then return end
-    local hasTool = HasTool(player)
+
+    -- Only admins (or single-player host) may use the manager / place points.
+    local isAdmin = player:getAccessLevel() == "admin"
+    if not isAdmin then return end
 
     local square = worldObjects[1] and worldObjects[1]:getSquare()
-    if square and hasTool then
+    if square then
         local x, y, z = square:getX(), square:getY(), square:getZ()
         local txt = string.format("Place Trigger (%d,%d,%d)", x, y, z)
         context:addOption(txt, nil, function()
@@ -1215,9 +1308,7 @@ function EventTrigger.OnFillWorldObjectContextMenu(playerIndex, context, worldOb
         end
     end
 
-    if hasTool then
-        context:addOption("EventTrigger Manager", nil, EventTrigger.OpenUI)
-    end
+    context:addOption("EventTrigger Manager", nil, EventTrigger.OpenUI)
 end
 
 -- ============================================================
@@ -1293,6 +1384,7 @@ function EventTriggerTextPrompt:create()
     local padX = self.padX
     local entryH = self.entryH
     local btnH = self.btnH
+    local gap = 20
 
     self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerTextPrompt.onCancel)
     self.closeBtn:initialise()
@@ -1348,8 +1440,7 @@ end
 
 function EventTriggerTextPrompt:onBack()
     self:close()
-    if self.onBackCallback then self.onBack
-    if self.onCancelCallback then self.onCancelCallback() end
+    if self.onBackCallback then self.onBackCallback() end
 end
 
 function EventTriggerTextPrompt:close()
@@ -1400,95 +1491,618 @@ function EventTriggerTextPrompt:prerender()
 end
 
 -- ============================================================
+-- Shared drag handlers for modal prompts
+-- ============================================================
+local function promptMouseDown(self, x, y)
+    if y >= 0 and y < 28 then
+        self.dragging = true
+        self.dragOfsX = getMouseX() - self.x
+        self.dragOfsY = getMouseY() - self.y
+        self:setCapture(true)
+        return true
+    end
+    return ISPanel.onMouseDown(self, x, y)
+end
+
+local function promptMouseMove(self, x, y)
+    if self.dragging then
+        self:setX(getMouseX() - self.dragOfsX)
+        self:setY(getMouseY() - self.dragOfsY)
+        return true
+    end
+end
+
+local function promptMouseUp(self, x, y)
+    if self.dragging then
+        self.dragging = false
+        self:setCapture(false)
+        return true
+    end
+end
+
+local function readIntEntry(entry)
+    local v = tonumber(entry and entry:getText() or "")
+    if not v then return 0 end
+    v = math.floor(v)
+    if v < 0 then return 0 end
+    return v
+end
+
+-- ============================================================
+-- EventTriggerChoicePrompt — button-based single-choice dialog
+-- ============================================================
+EventTriggerChoicePrompt = ISPanel:derive("EventTriggerChoicePrompt")
+EventTriggerChoicePrompt.onMouseDown = promptMouseDown
+EventTriggerChoicePrompt.onMouseMove = promptMouseMove
+EventTriggerChoicePrompt.onMouseUp = promptMouseUp
+
+function EventTriggerChoicePrompt:new(title, prompt, choices, selectedValue, onChoose, onCancel, onBack)
+    local s = EventTrigger.US
+    local w = EventTrigger.fitW(520)
+    local btnH = math.floor(38 * s)
+    local gap = math.floor(10 * s)
+    local pad = math.floor(20 * s)
+    local titleH = 28
+    local promptY = titleH + math.floor(16 * s)
+    local listTop = promptY + math.floor(24 * s)
+    local bottomH = btnH + math.floor(24 * s)
+    local h = listTop + #choices * (btnH + gap) + bottomH
+
+    local sw = getCore():getScreenWidth()
+    local sh = getCore():getScreenHeight()
+    local x, y = (sw - w) / 2, (sh - h) / 2
+
+    local o = ISPanel:new(x, y, w, h)
+    setmetatable(o, self)
+    self.__index = self
+    o.borderColor = { r = 0.5, g = 0.5, b = 0.5, a = 1 }
+    o.backgroundColor = { r = 0, g = 0, b = 0, a = 0.92 }
+    o.width = w
+    o.height = h
+    o.title = title
+    o.prompt = prompt
+    o.choices = choices
+    o.selectedValue = selectedValue
+    o.onChooseCallback = onChoose
+    o.onCancelCallback = onCancel
+    o.onBackCallback = onBack
+    o.btnH = btnH
+    o.gap = gap
+    o.pad = pad
+    o.promptY = promptY
+    o.listTop = listTop
+    o.dragging = false
+    return o
+end
+
+function EventTriggerChoicePrompt:initialise()
+    ISPanel.initialise(self)
+    self:create()
+end
+
+function EventTriggerChoicePrompt:create()
+    self:setAlwaysOnTop(true)
+
+    self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerChoicePrompt.onCancel)
+    self.closeBtn:initialise()
+    self:addChild(self.closeBtn)
+
+    local cy = self.listTop
+    for _, choice in ipairs(self.choices) do
+        local c = choice
+        local label = c.label
+        if c.value == self.selectedValue then label = "> " .. label end
+        local btn = ISButton:new(self.pad, cy, self.width - self.pad * 2, self.btnH, label, self, function()
+            self:onChoose(c.value)
+        end)
+        btn:initialise()
+        self:addChild(btn)
+        cy = cy + self.btnH + self.gap
+    end
+
+    -- Bottom buttons
+    local btnY = self.height - self.btnH - math.floor(12 * EventTrigger.US)
+    local bx = self.pad
+    local function place(title, handler)
+        local bw = EventTrigger.btnW(title)
+        local b = ISButton:new(bx, btnY, bw, self.btnH, title, self, handler)
+        b:initialise()
+        self:addChild(b)
+        bx = bx + bw + 10
+        return b
+    end
+    if self.onBackCallback then place("Back", EventTriggerChoicePrompt.onBack) end
+    place("Cancel", EventTriggerChoicePrompt.onCancel)
+end
+
+function EventTriggerChoicePrompt:onChoose(value)
+    self:close()
+    if self.onChooseCallback then self.onChooseCallback(value) end
+end
+
+function EventTriggerChoicePrompt:onCancel()
+    self:close()
+    if self.onCancelCallback then self.onCancelCallback() end
+end
+
+function EventTriggerChoicePrompt:onBack()
+    self:close()
+    if self.onBackCallback then self.onBackCallback() end
+end
+
+function EventTriggerChoicePrompt:close()
+    self:setVisible(false)
+    self:removeFromUIManager()
+end
+
+function EventTriggerChoicePrompt:prerender()
+    ISPanel.prerender(self)
+    self:drawRectBorder(0, 0, self.width, self.height, 0.9, 0.35, 0.35, 0.35)
+    self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
+    self:drawTextCentre(self.title or "", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+    if self.prompt and #self.prompt > 0 then
+        self:drawText(self.prompt, self.pad, self.promptY, 0.85, 0.85, 0.85, 1, UIFont.Small)
+    end
+end
+
+-- ============================================================
+-- EventTriggerNumberPrompt — numeric input with validation/clamp
+-- ============================================================
+EventTriggerNumberPrompt = ISPanel:derive("EventTriggerNumberPrompt")
+EventTriggerNumberPrompt.onMouseDown = promptMouseDown
+EventTriggerNumberPrompt.onMouseMove = promptMouseMove
+EventTriggerNumberPrompt.onMouseUp = promptMouseUp
+
+function EventTriggerNumberPrompt:new(title, prompt, defaultText, onOk, onCancel, onBack, opts)
+    local s = EventTrigger.US
+    local w = EventTrigger.fitW(480)
+    local titleH = 28
+    local promptY = titleH + math.floor(18 * s)
+    local entryH = math.floor(30 * s)
+    local entryY = promptY + math.floor(24 * s)
+    local btnH = math.floor(34 * s)
+    local btnY = entryY + entryH + math.floor(22 * s)
+    local h = btnY + btnH + math.floor(18 * s)
+    local pad = math.floor(24 * s)
+
+    local sw = getCore():getScreenWidth()
+    local sh = getCore():getScreenHeight()
+    local x, y = (sw - w) / 2, (sh - h) / 2
+
+    local o = ISPanel:new(x, y, w, h)
+    setmetatable(o, self)
+    self.__index = self
+    o.borderColor = { r = 0.5, g = 0.5, b = 0.5, a = 1 }
+    o.backgroundColor = { r = 0, g = 0, b = 0, a = 0.92 }
+    o.width = w
+    o.height = h
+    o.title = title
+    o.prompt = prompt
+    o.defaultText = tostring(defaultText or "")
+    o.opts = opts or {}
+    o.onOkCallback = onOk
+    o.onCancelCallback = onCancel
+    o.onBackCallback = onBack
+    o.promptY = promptY
+    o.entryY = entryY
+    o.entryH = entryH
+    o.btnY = btnY
+    o.btnH = btnH
+    o.pad = pad
+    o.dragging = false
+    return o
+end
+
+function EventTriggerNumberPrompt:initialise()
+    ISPanel.initialise(self)
+    self:create()
+end
+
+function EventTriggerNumberPrompt:create()
+    self:setAlwaysOnTop(true)
+
+    self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerNumberPrompt.onCancel)
+    self.closeBtn:initialise()
+    self:addChild(self.closeBtn)
+
+    self.entry = ISTextEntryBox:new(self.defaultText, self.pad, self.entryY, self.width - self.pad * 2, self.entryH)
+    self.entry:initialise()
+    self.entry:instantiate()
+    -- Only restrict to digits when the field can't be negative (e.g. -1 = unlimited).
+    if self.opts.integer and (self.opts.min == nil or self.opts.min >= 0) then
+        self.entry:setOnlyNumbers(true)
+    end
+    self:addChild(self.entry)
+
+    local okW = EventTrigger.btnW("OK")
+    local cancelW = EventTrigger.btnW("Cancel")
+    local backW = self.onBackCallback and EventTrigger.btnW("Back") or 0
+    local gap = 16
+    local total = okW + gap + cancelW + (backW > 0 and (gap + backW) or 0)
+    local startX = (self.width - total) / 2
+
+    local bx = startX
+    if backW > 0 then
+        self.backBtn = ISButton:new(bx, self.btnY, backW, self.btnH, "Back", self, EventTriggerNumberPrompt.onBack)
+        self.backBtn:initialise()
+        self:addChild(self.backBtn)
+        bx = bx + backW + gap
+    end
+    self.okBtn = ISButton:new(bx, self.btnY, okW, self.btnH, "OK", self, EventTriggerNumberPrompt.onOk)
+    self.okBtn:initialise()
+    self:addChild(self.okBtn)
+    bx = bx + okW + gap
+    self.cancelBtn = ISButton:new(bx, self.btnY, cancelW, self.btnH, "Cancel", self, EventTriggerNumberPrompt.onCancel)
+    self.cancelBtn:initialise()
+    self:addChild(self.cancelBtn)
+end
+
+function EventTriggerNumberPrompt:onOk()
+    local raw = self.entry and self.entry:getText() or ""
+    local num = tonumber(raw)
+    if num == nil then num = tonumber(self.defaultText) end
+    if num == nil then num = 0 end
+    if self.opts.integer then num = math.floor(num) end
+    if self.opts.min and num < self.opts.min then num = self.opts.min end
+    if self.opts.max and num > self.opts.max then num = self.opts.max end
+    self:close()
+    if self.onOkCallback then self.onOkCallback(num) end
+end
+
+function EventTriggerNumberPrompt:onCancel()
+    self:close()
+    if self.onCancelCallback then self.onCancelCallback() end
+end
+
+function EventTriggerNumberPrompt:onBack()
+    self:close()
+    if self.onBackCallback then self.onBackCallback() end
+end
+
+function EventTriggerNumberPrompt:close()
+    self:setVisible(false)
+    self:removeFromUIManager()
+end
+
+function EventTriggerNumberPrompt:prerender()
+    ISPanel.prerender(self)
+    self:drawRectBorder(0, 0, self.width, self.height, 0.9, 0.35, 0.35, 0.35)
+    self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
+    self:drawTextCentre(self.title or "", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+    if self.prompt and #self.prompt > 0 then
+        self:drawText(self.prompt, self.pad, self.promptY, 0.85, 0.85, 0.85, 1, UIFont.Small)
+    end
+end
+
+-- ============================================================
+-- EventTriggerCooldownPrompt — mode buttons + Y/M/D/H/Min inputs
+-- ============================================================
+EventTriggerCooldownPrompt = ISPanel:derive("EventTriggerCooldownPrompt")
+EventTriggerCooldownPrompt.onMouseDown = promptMouseDown
+EventTriggerCooldownPrompt.onMouseMove = promptMouseMove
+EventTriggerCooldownPrompt.onMouseUp = promptMouseUp
+
+local COOLDOWN_FIELDS = {
+    { key = "years",   label = "Years" },
+    { key = "months",  label = "Months" },
+    { key = "days",    label = "Days" },
+    { key = "hours",   label = "Hours" },
+    { key = "minutes", label = "Minutes" },
+}
+
+function EventTriggerCooldownPrompt:new(cooldown, onOk, onCancel, onBack)
+    cooldown = EventTrigger.makeCooldown(cooldown or {})
+    local s = EventTrigger.US
+    local w = EventTrigger.fitW(680)
+    local titleH = 28
+    local modeY = titleH + math.floor(16 * s)
+    local modeBtnH = math.floor(34 * s)
+    local fieldLabelY = modeY + modeBtnH + math.floor(22 * s)
+    local fieldEntryY = fieldLabelY + math.floor(18 * s)
+    local fieldEntryH = math.floor(28 * s)
+    local btnH = math.floor(34 * s)
+    local btnY = fieldEntryY + fieldEntryH + math.floor(22 * s)
+    local h = btnY + btnH + math.floor(18 * s)
+    local pad = math.floor(20 * s)
+
+    local sw = getCore():getScreenWidth()
+    local sh = getCore():getScreenHeight()
+    local x, y = (sw - w) / 2, (sh - h) / 2
+
+    local o = ISPanel:new(x, y, w, h)
+    setmetatable(o, self)
+    self.__index = self
+    o.borderColor = { r = 0.5, g = 0.5, b = 0.5, a = 1 }
+    o.backgroundColor = { r = 0, g = 0, b = 0, a = 0.92 }
+    o.width = w
+    o.height = h
+    o.cooldown = cooldown
+    o.mode = cooldown.mode
+    o.onOkCallback = onOk
+    o.onCancelCallback = onCancel
+    o.onBackCallback = onBack
+    o.modeY = modeY
+    o.modeBtnH = modeBtnH
+    o.fieldLabelY = fieldLabelY
+    o.fieldEntryY = fieldEntryY
+    o.fieldEntryH = fieldEntryH
+    o.btnY = btnY
+    o.btnH = btnH
+    o.pad = pad
+    o.entries = {}
+    o.dragging = false
+    return o
+end
+
+function EventTriggerCooldownPrompt:initialise()
+    ISPanel.initialise(self)
+    self:create()
+end
+
+function EventTriggerCooldownPrompt:create()
+    self:setAlwaysOnTop(true)
+
+    self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerCooldownPrompt.onCancel)
+    self.closeBtn:initialise()
+    self:addChild(self.closeBtn)
+
+    -- Mode buttons (fixed width so the selected prefix never overflows)
+    local modeDefs = {
+        { EventTrigger.COOLDOWN_NONE, "None" },
+        { EventTrigger.COOLDOWN_WALL, "Wall Clock" },
+        { EventTrigger.COOLDOWN_GAME, "Game Clock" },
+    }
+    local modeW = EventTrigger.btnW("Wall Clock") + 24
+    local gap = math.floor(12 * EventTrigger.US)
+    local totalW = modeW * 3 + gap * 2
+    local mx = (self.width - totalW) / 2
+    self.modeButtons = {}
+    for i, md in ipairs(modeDefs) do
+        local m = md[1]
+        local label = md[2]
+        local btn = ISButton:new(mx + (i - 1) * (modeW + gap), self.modeY, modeW, self.modeBtnH, label, self, function()
+            self:setMode(m)
+        end)
+        btn:initialise()
+        self:addChild(btn)
+        self.modeButtons[m] = btn
+    end
+
+    -- Five duration fields
+    local fieldW = math.floor(90 * EventTrigger.US)
+    local fgap = math.floor(12 * EventTrigger.US)
+    local fTotal = fieldW * 5 + fgap * 4
+    local fx = (self.width - fTotal) / 2
+    for i, fd in ipairs(COOLDOWN_FIELDS) do
+        local cx = fx + (i - 1) * (fieldW + fgap)
+        local lbl = ISLabel:new(cx, self.fieldLabelY, 16, fd.label, 0.7, 0.8, 0.9, 1, UIFont.Small, true)
+        lbl:initialise()
+        self:addChild(lbl)
+
+        local entry = ISTextEntryBox:new(tostring(self.cooldown[fd.key] or 0), cx, self.fieldEntryY, fieldW, self.fieldEntryH)
+        entry:initialise()
+        entry:instantiate()
+        entry:setOnlyNumbers(true)
+        self:addChild(entry)
+        self.entries[fd.key] = entry
+    end
+
+    -- Bottom buttons
+    local okW = EventTrigger.btnW("OK")
+    local cancelW = EventTrigger.btnW("Cancel")
+    local backW = self.onBackCallback and EventTrigger.btnW("Back") or 0
+    local bgap = 16
+    local btotal = okW + bgap + cancelW + (backW > 0 and (bgap + backW) or 0)
+    local bx = (self.width - btotal) / 2
+    if backW > 0 then
+        self.backBtn = ISButton:new(bx, self.btnY, backW, self.btnH, "Back", self, EventTriggerCooldownPrompt.onBack)
+        self.backBtn:initialise()
+        self:addChild(self.backBtn)
+        bx = bx + backW + bgap
+    end
+    self.okBtn = ISButton:new(bx, self.btnY, okW, self.btnH, "OK", self, EventTriggerCooldownPrompt.onOk)
+    self.okBtn:initialise()
+    self:addChild(self.okBtn)
+    bx = bx + okW + bgap
+    self.cancelBtn = ISButton:new(bx, self.btnY, cancelW, self.btnH, "Cancel", self, EventTriggerCooldownPrompt.onCancel)
+    self.cancelBtn:initialise()
+    self:addChild(self.cancelBtn)
+
+    self:refreshModeButtons()
+    self:updateFieldEnable()
+end
+
+function EventTriggerCooldownPrompt:setMode(mode)
+    self.mode = mode
+    self:refreshModeButtons()
+    self:updateFieldEnable()
+end
+
+function EventTriggerCooldownPrompt:refreshModeButtons()
+    local labels = {
+        [EventTrigger.COOLDOWN_NONE] = "None",
+        [EventTrigger.COOLDOWN_WALL] = "Wall Clock",
+        [EventTrigger.COOLDOWN_GAME] = "Game Clock",
+    }
+    for mode, btn in pairs(self.modeButtons) do
+        local prefix = (mode == self.mode) and "> " or "   "
+        btn:setTitle(prefix .. labels[mode])
+    end
+end
+
+function EventTriggerCooldownPrompt:updateFieldEnable()
+    local enabled = (self.mode ~= EventTrigger.COOLDOWN_NONE)
+    for _, fd in ipairs(COOLDOWN_FIELDS) do
+        local entry = self.entries[fd.key]
+        if entry then entry:setEditable(enabled) end
+    end
+end
+
+function EventTriggerCooldownPrompt:onOk()
+    local cd
+    if self.mode == EventTrigger.COOLDOWN_NONE then
+        cd = EventTrigger.makeCooldown({ mode = EventTrigger.COOLDOWN_NONE })
+    else
+        cd = {
+            mode    = self.mode,
+            years   = readIntEntry(self.entries.years),
+            months  = readIntEntry(self.entries.months),
+            days    = readIntEntry(self.entries.days),
+            hours   = readIntEntry(self.entries.hours),
+            minutes = readIntEntry(self.entries.minutes),
+        }
+    end
+    self:close()
+    if self.onOkCallback then self.onOkCallback(cd) end
+end
+
+function EventTriggerCooldownPrompt:onCancel()
+    self:close()
+    if self.onCancelCallback then self.onCancelCallback() end
+end
+
+function EventTriggerCooldownPrompt:onBack()
+    self:close()
+    if self.onBackCallback then self.onBackCallback() end
+end
+
+function EventTriggerCooldownPrompt:close()
+    self:setVisible(false)
+    self:removeFromUIManager()
+end
+
+function EventTriggerCooldownPrompt:prerender()
+    ISPanel.prerender(self)
+    self:drawRectBorder(0, 0, self.width, self.height, 0.9, 0.35, 0.35, 0.35)
+    self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
+    self:drawTextCentre("Cooldown", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+end
+
+-- ============================================================
 -- Placement wizard (multi-step input)
 -- Step 1: Enter delay(seconds), range, max triggers
 -- ============================================================
+-- Output mode choices (shared by place + edit wizards)
+EventTrigger.OUTPUT_CHOICES = {
+    { label = "Named (system channel)", value = EventTrigger.OutputType.NAMED },
+    { label = "/say (with bubble)",     value = EventTrigger.OutputType.SAY },
+    { label = "/do (narration)",        value = EventTrigger.OutputType.DO },
+    { label = "/low (whisper)",         value = EventTrigger.OutputType.LOW },
+    { label = "/yell (shout)",          value = EventTrigger.OutputType.YELL },
+    { label = "/ooc (global)",          value = EventTrigger.OutputType.OOC },
+    { label = "Above Head (halo)",      value = EventTrigger.OutputType.HALO },
+}
+
 function EventTrigger.PromptDelayRange(x, y, z)
     local cfg = EventTrigger.GetConfig()
     local prev = EventTrigger._pending
-    EventTrigger._pending = { x = x, y = y, z = z }
-    -- Preserve previously entered values when navigating "Back" to this step.
-    if prev then
-        EventTrigger._pending.delay = prev.delay
-        EventTrigger._pending.range = prev.range
-        EventTrigger._pending.maxTriggers = prev.maxTriggers
-        EventTrigger._pending.msg = prev.msg
-        EventTrigger._pending.outputType = prev.outputType
-        EventTrigger._pending.outputName = prev.outputName
-    end
-    local defaultText
-    if EventTrigger._pending.delay then
-        defaultText = string.format("%d, %.1f, %d", EventTrigger._pending.delay, EventTrigger._pending.range or cfg.defaultRange, EventTrigger._pending.maxTriggers or -1)
-    else
-        defaultText = string.format("%d, %.1f, -1", 3, cfg.defaultRange)
-    end
-    local modal = EventTriggerTextPrompt:new(
-        "New Trigger",
-        "Delay(s), Range, MaxTriggers (-1=unlimited)",
-        defaultText,
-        function(text)
-            local p = EventTrigger._pending
-            p.delay, p.range, p.maxTriggers = 3, cfg.defaultRange, -1
-            local parts = luautils.split(text, ",")
-            if #parts >= 1 then p.delay = tonumber(parts[1]) or 3 end
-            if #parts >= 2 then p.range = tonumber(parts[2]) or cfg.defaultRange end
-            if #parts >= 3 then p.maxTriggers = tonumber(parts[3]) or -1 end
-            if p.delay < 0 then p.delay = 0 end
-            if p.range < 0.5 then p.range = 0.5 end
-            if p.maxTriggers == 0 then p.maxTriggers = -1 end
-            EventTrigger.PromptMessage2()
-        end)
+    EventTrigger._pending = {
+        x = x, y = y, z = z,
+        delay       = (prev and prev.delay) or 3,
+        range       = (prev and prev.range) or cfg.defaultRange,
+        maxTriggers = (prev and prev.maxTriggers) or -1,
+        msg         = prev and prev.msg,
+        outputType  = (prev and prev.outputType) or EventTrigger.OutputType.SAY,
+        outputName  = prev and prev.outputName,
+        cooldown    = prev and prev.cooldown,
+    }
+    EventTrigger.PromptDelay()
+end
+
+function EventTrigger.PromptDelay()
+    local p = EventTrigger._pending
+    local modal = EventTriggerNumberPrompt:new(
+        "Delay",
+        "Trigger delay in seconds (0 = instant)",
+        tostring(p.delay or 3),
+        function(num)
+            p.delay = num
+            EventTrigger.PromptRange()
+        end,
+        function() EventTrigger._pending = nil end,
+        nil,
+        { integer = true, min = 0, max = 3600 })
     modal:initialise()
     modal:addToUIManager()
 end
 
--- Step 2: Enter trigger message text
+function EventTrigger.PromptRange()
+    local p = EventTrigger._pending
+    local modal = EventTriggerNumberPrompt:new(
+        "Range",
+        "Trigger radius in tiles (minimum 0.5)",
+        tostring(p.range or 2),
+        function(num)
+            p.range = num
+            EventTrigger.PromptMaxTriggers()
+        end,
+        function() EventTrigger._pending = nil end,
+        function() EventTrigger.PromptDelay() end,
+        { min = 0.5 })
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+function EventTrigger.PromptMaxTriggers()
+    local p = EventTrigger._pending
+    local modal = EventTriggerNumberPrompt:new(
+        "Max Triggers",
+        "Maximum trigger count (-1 = unlimited)",
+        tostring(p.maxTriggers or -1),
+        function(num)
+            if num == 0 then num = -1 end
+            p.maxTriggers = num
+            EventTrigger.PromptMessage2()
+        end,
+        function() EventTrigger._pending = nil end,
+        function() EventTrigger.PromptRange() end,
+        { integer = true, min = -1 })
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+-- Step 4: Enter trigger message text
 function EventTrigger.PromptMessage2()
     local p = EventTrigger._pending
     local defaultText = (p.msg and #p.msg > 0) and p.msg or "Trigger activated!"
     local modal = EventTriggerTextPrompt:new(
         "Trigger Message",
-        "Trigger Message (OK to continue)",
+        "Trigger message text",
         defaultText,
         function(text)
             p.msg = text
             if not p.msg or #p.msg == 0 then p.msg = "Trigger activated!" end
             EventTrigger.PromptOutput2()
         end,
-        nil,
-        function()
-            EventTrigger.PromptDelayRange(p.x, p.y, p.z)
-        end)
+        function() EventTrigger._pending = nil end,
+        function() EventTrigger.PromptMaxTriggers() end)
     modal:initialise()
     modal:addToUIManager()
 end
 
--- Step 3: Select output mode
+-- Step 5: Select output mode (button-based)
 function EventTrigger.PromptOutput2()
     local p = EventTrigger._pending
-    local defaultText = tostring(p.outputType or 2)
-    local modal = EventTriggerTextPrompt:new(
+    local modal = EventTriggerChoicePrompt:new(
         "Output Mode",
-        "Output: 1=Named 2=/say 3=/do 4=/low 5=/yell 6=/ooc 7=Above Head",
-        defaultText,
-        function(text)
-            p.outputType = tonumber(text) or 2
-            if p.outputType < 1 or p.outputType > 7 then p.outputType = 2 end
-            if p.outputType == EventTrigger.OutputType.NAMED then
+        "Choose how the message is shown",
+        EventTrigger.OUTPUT_CHOICES,
+        p.outputType or EventTrigger.OutputType.SAY,
+        function(value)
+            p.outputType = value
+            if value == EventTrigger.OutputType.NAMED then
                 EventTrigger.PromptOutputName2()
             else
-                EventTrigger.PlacePending()
+                EventTrigger.PromptCooldown2()
             end
         end,
-        nil,
-        function()
-            EventTrigger.PromptMessage2()
-        end)
+        function() EventTrigger._pending = nil end,
+        function() EventTrigger.PromptMessage2() end)
     modal:initialise()
     modal:addToUIManager()
 end
 
--- Step 3b (Named mode only): enter display name
+-- Step 5b (Named mode only): enter display name
 function EventTrigger.PromptOutputName2()
     local p = EventTrigger._pending
     local cfg = EventTrigger.GetConfig()
@@ -1496,15 +2110,34 @@ function EventTrigger.PromptOutputName2()
     if not current or #current == 0 then current = cfg.outputName end
     local modal = EventTriggerTextPrompt:new(
         "Named Mode",
-        "Display Name for Named mode (OK to place)",
+        "Display name for Named mode",
         current,
         function(text)
             p.outputName = text or ""
+            EventTrigger.PromptCooldown2()
+        end,
+        function() EventTrigger._pending = nil end,
+        function() EventTrigger.PromptOutput2() end)
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+-- Step 6: Cooldown (None / Wall Clock / Game Clock + duration)
+function EventTrigger.PromptCooldown2()
+    local p = EventTrigger._pending
+    local modal = EventTriggerCooldownPrompt:new(
+        p.cooldown or { mode = EventTrigger.COOLDOWN_NONE },
+        function(cd)
+            p.cooldown = cd
             EventTrigger.PlacePending()
         end,
-        nil,
+        function() EventTrigger._pending = nil end,
         function()
-            EventTrigger.PromptOutput2()
+            if p.outputType == EventTrigger.OutputType.NAMED then
+                EventTrigger.PromptOutputName2()
+            else
+                EventTrigger.PromptOutput2()
+            end
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1522,6 +2155,7 @@ function EventTrigger.PlacePending()
         delay = p.delay, message = p.msg, range = p.range,
         outputType = p.outputType, maxTriggers = p.maxTriggers,
         outputName = p.outputName or "",
+        cooldown = p.cooldown or { mode = EventTrigger.COOLDOWN_NONE },
         creator = EventTrigger.GetCurrentPlayerId(),
     }
     dbg("PlacePending: placing trigger at (", p.x, p.y, p.z, "), msg=", p.msg, "delay=", p.delay, "range=", p.range)
@@ -1556,7 +2190,7 @@ function EventTrigger.PromptEditMessage(index)
     if not t then return end
     local modal = EventTriggerTextPrompt:new(
         "Edit Message",
-        "Message (OK to continue)",
+        "Trigger message text",
         t.message,
         function(text)
             EventTrigger.SendCommand("editTriggerMessage", {
@@ -1564,85 +2198,99 @@ function EventTrigger.PromptEditMessage(index)
                 id = t and t.id,
                 message = text,
             })
-            EventTrigger.PromptEditDelayRange()
+            EventTrigger.PromptEditDelay()
         end)
     modal:initialise()
     modal:addToUIManager()
 end
 
--- Step 2: Edit delay, range, max triggers
-function EventTrigger.PromptEditDelayRange()
+-- Step 2: Edit delay
+function EventTrigger.PromptEditDelay()
     local idx = EventTrigger._editIndex
     local t = EventTrigger.triggers[idx]
     if not t then return end
-    local defaultText = string.format("%d, %.1f, %d", t.delay or 3, t.range or 2, t.maxTriggers or -1)
-    local modal = EventTriggerTextPrompt:new(
-        "Edit Params",
-        "Delay(s), Range, MaxTriggers (-1=unlim, OK to continue)",
-        defaultText,
-        function(text)
-            local parts = luautils.split(text, ",")
-            local delay, range, maxTriggers
-            if #parts >= 1 then delay = tonumber(parts[1]) end
-            if #parts >= 2 then
-                range = tonumber(parts[2])
-                if range and range < 0.5 then range = 0.5 end
-            end
-            if #parts >= 3 then
-                maxTriggers = tonumber(parts[3])
-                if maxTriggers == 0 then maxTriggers = -1 end
-            end
-            EventTrigger.SendCommand("editTriggerParams", {
-                index = idx,
-                id = t and t.id,
-                delay = delay,
-                range = range,
-                maxTriggers = maxTriggers,
-            })
-            EventTrigger.PromptEditOutput()
+    local modal = EventTriggerNumberPrompt:new(
+        "Edit Delay",
+        "Trigger delay in seconds (0 = instant)",
+        tostring(t.delay or 3),
+        function(num)
+            EventTrigger.SendCommand("editTriggerParams", { index = idx, id = t.id, delay = num })
+            EventTrigger.PromptEditRange()
         end,
         nil,
-        function()
-            EventTrigger.PromptEditMessage(EventTrigger._editIndex)
-        end)
+        function() EventTrigger.PromptEditMessage(idx) end,
+        { integer = true, min = 0, max = 3600 })
     modal:initialise()
     modal:addToUIManager()
 end
 
--- Step 3: Edit output mode
+-- Step 3: Edit range
+function EventTrigger.PromptEditRange()
+    local idx = EventTrigger._editIndex
+    local t = EventTrigger.triggers[idx]
+    if not t then return end
+    local modal = EventTriggerNumberPrompt:new(
+        "Edit Range",
+        "Trigger radius in tiles (minimum 0.5)",
+        tostring(t.range or 2),
+        function(num)
+            EventTrigger.SendCommand("editTriggerParams", { index = idx, id = t.id, range = num })
+            EventTrigger.PromptEditMaxTriggers()
+        end,
+        nil,
+        function() EventTrigger.PromptEditDelay() end,
+        { min = 0.5 })
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+-- Step 4: Edit max triggers
+function EventTrigger.PromptEditMaxTriggers()
+    local idx = EventTrigger._editIndex
+    local t = EventTrigger.triggers[idx]
+    if not t then return end
+    local modal = EventTriggerNumberPrompt:new(
+        "Edit Max Triggers",
+        "Maximum trigger count (-1 = unlimited)",
+        tostring(t.maxTriggers or -1),
+        function(num)
+            if num == 0 then num = -1 end
+            EventTrigger.SendCommand("editTriggerParams", { index = idx, id = t.id, maxTriggers = num })
+            EventTrigger.PromptEditOutput()
+        end,
+        nil,
+        function() EventTrigger.PromptEditRange() end,
+        { integer = true, min = -1 })
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+-- Step 5: Edit output mode (button-based)
 function EventTrigger.PromptEditOutput()
     local idx = EventTrigger._editIndex
     local t = EventTrigger.triggers[idx]
     if not t then return end
     local ot = t.outputType or EventTrigger.OutputType.HALO
-    local modal = EventTriggerTextPrompt:new(
+    local modal = EventTriggerChoicePrompt:new(
         "Edit Output",
-        "Output: 1=Named 2=/say 3=/do 4=/low 5=/yell 6=/ooc 7=Above Head (current: " .. OutputTypeToName(ot) .. ")",
-        tostring(ot),
-        function(text)
-            local val = tonumber(text)
-            if val and val >= 1 and val <= 7 then
-                EventTrigger.SendCommand("editTriggerOutput", {
-                    index = idx,
-                    id = t and t.id,
-                    outputType = val,
-                })
-            end
-            if val == EventTrigger.OutputType.NAMED then
+        "Choose how the message is shown",
+        EventTrigger.OUTPUT_CHOICES,
+        ot,
+        function(value)
+            EventTrigger.SendCommand("editTriggerOutput", { index = idx, id = t.id, outputType = value })
+            if value == EventTrigger.OutputType.NAMED then
                 EventTrigger.PromptEditOutputName()
             else
-                if EventTrigger._ui then EventTrigger._ui:refreshList() end
+                EventTrigger.PromptEditCooldown()
             end
         end,
         nil,
-        function()
-            EventTrigger.PromptEditDelayRange()
-        end)
+        function() EventTrigger.PromptEditMaxTriggers() end)
     modal:initialise()
     modal:addToUIManager()
 end
 
--- Step 3b (Named mode only)
+-- Step 5b (Named mode only)
 function EventTrigger.PromptEditOutputName()
     local idx = EventTrigger._editIndex
     local t = EventTrigger.triggers[idx]
@@ -1652,7 +2300,7 @@ function EventTrigger.PromptEditOutputName()
     if not current or #current == 0 then current = cfg.outputName end
     local modal = EventTriggerTextPrompt:new(
         "Named Mode",
-        "Display Name for Named mode",
+        "Display name for Named mode",
         current,
         function(text)
             EventTrigger.SendCommand("editTriggerOutput", {
@@ -1660,11 +2308,32 @@ function EventTrigger.PromptEditOutputName()
                 id = t and t.id,
                 outputName = (text and #text > 0) and text or "",
             })
+            EventTrigger.PromptEditCooldown()
+        end,
+        nil,
+        function() EventTrigger.PromptEditOutput() end)
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+-- Step 6: Edit cooldown
+function EventTrigger.PromptEditCooldown()
+    local idx = EventTrigger._editIndex
+    local t = EventTrigger.triggers[idx]
+    if not t then return end
+    local modal = EventTriggerCooldownPrompt:new(
+        t.cooldown or { mode = EventTrigger.COOLDOWN_NONE },
+        function(cd)
+            EventTrigger.SendCommand("editTriggerParams", { index = idx, id = t.id, cooldown = cd })
             if EventTrigger._ui then EventTrigger._ui:refreshList() end
         end,
         nil,
         function()
-            EventTrigger.PromptEditOutput()
+            if t.outputType == EventTrigger.OutputType.NAMED then
+                EventTrigger.PromptEditOutputName()
+            else
+                EventTrigger.PromptEditOutput()
+            end
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -2230,7 +2899,7 @@ function EventTriggerUI:prerender()
 
     -- Empty list hint
     if total == 0 then
-        local txt = "No triggers yet. Right-click ground with EventTriggerTool to place one."
+        local txt = "No triggers yet. Right-click ground to place one (admin only)."
         self:drawTextCentre(txt, self.width / 2, self.listY + 20, 0.45, 0.45, 0.45, 1, UIFont.Small)
     end
 

@@ -240,37 +240,27 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
 end
 
 -- ============================================================
--- Check cooldown for delivery
+-- Check cooldown for delivery (wall clock vs game clock)
 -- ============================================================
 function EventTrigger.Delivery.CheckCooldown(player, deliveryData)
-    local cooldownType = deliveryData.cooldownType or 0
-    local cooldownValue = deliveryData.cooldownValue or 0
-    if cooldownType == 0 or cooldownValue <= 0 then
+    local cooldown = deliveryData.cooldown or {}
+    if EventTrigger.isCooldownZero(cooldown) then
         return true, ""
     end
-    
+
     local playerKey = player:getUsername() or tostring(player:getOnlineID())
     local playerCooldowns = deliveryData.playerCooldowns or {}
     local lastDelivery = playerCooldowns[playerKey]
     if not lastDelivery then
         return true, ""
     end
-    
-    local now
-    if cooldownType == 1 then
-        -- Game time (in minutes)
-        now = getGameTime():getWorldAgeHours() * 60
-    else
-        -- Real time (in minutes)
-        now = os.time() / 60
+
+    local now = EventTrigger.cooldownNowSeconds(cooldown.mode)
+    local total = EventTrigger.cooldownDurationSeconds(cooldown)
+    if (now - lastDelivery) < total then
+        return false, "Cooldown active! " .. EventTrigger.formatCooldown(cooldown)
     end
-    
-    local elapsed = now - lastDelivery
-    if elapsed < cooldownValue then
-        local remaining = math.ceil(cooldownValue - elapsed)
-        return false, string.format("Cooldown active! Wait %d more minutes.", remaining)
-    end
-    
+
     return true, ""
 end
 
@@ -599,6 +589,11 @@ function EventTriggerDeliveryConfirm:onConfirm()
             if not delivery.triggeredBy then delivery.triggeredBy = {} end
             if not delivery.playerDeliveries then delivery.playerDeliveries = {} end
             delivery.playerDeliveries[playerKey] = (delivery.playerDeliveries[playerKey] or 0) + 1
+            local cd = delivery.cooldown or {}
+            if not EventTrigger.isCooldownZero(cd) then
+                if not delivery.playerCooldowns then delivery.playerCooldowns = {} end
+                delivery.playerCooldowns[playerKey] = EventTrigger.cooldownNowSeconds(cd.mode)
+            end
             local ts, tsStr = EventTrigger.GetTimestamp()
             table.insert(delivery.triggeredBy, { playerId = playerKey, timestamp = ts, timeStr = tsStr })
             EventTrigger._saveToModData()
@@ -676,9 +671,9 @@ function EventTriggerDeliveryConfirm:prerender()
     self:drawText(modeText, leftX, y, 0.9, 0.9, 0.3, 1, UIFont.Small)
     y = y + rowH
 
-    if delivery.cooldownType and delivery.cooldownType > 0 and delivery.cooldownValue > 0 then
-        local cdText = "Cooldown: " .. (delivery.cooldownType == 1 and "Game Time" or "Real Time") .. " " .. delivery.cooldownValue .. " min"
-        self:drawText(cdText, leftX, y, 0.7, 0.9, 0.7, 1, UIFont.Small)
+    local cdText = EventTrigger.formatCooldown(delivery.cooldown)
+    if cdText ~= "None" then
+        self:drawText("Cooldown: " .. cdText, leftX, y, 0.7, 0.9, 0.7, 1, UIFont.Small)
         y = y + rowH
     end
 
@@ -766,7 +761,8 @@ function EventTriggerDeliveryItemSelectOR:create()
 
     local titleH = 28
     self.infoY = titleH + 10
-    self.listStartY = self.infoY + 28
+    local hasCooldown = not EventTrigger.isCooldownZero(self.delivery.cooldown)
+    self.listStartY = self.infoY + (hasCooldown and 48 or 28)
 
     self.midX = math.floor(self.width / 2)
     self.leftX = 24
@@ -858,6 +854,11 @@ function EventTriggerDeliveryItemSelectOR:onConfirm()
             if not self.delivery.triggeredBy then self.delivery.triggeredBy = {} end
             if not self.delivery.playerDeliveries then self.delivery.playerDeliveries = {} end
             self.delivery.playerDeliveries[playerKey] = (self.delivery.playerDeliveries[playerKey] or 0) + 1
+            local cd = self.delivery.cooldown or {}
+            if not EventTrigger.isCooldownZero(cd) then
+                if not self.delivery.playerCooldowns then self.delivery.playerCooldowns = {} end
+                self.delivery.playerCooldowns[playerKey] = EventTrigger.cooldownNowSeconds(cd.mode)
+            end
             local ts, tsStr = EventTrigger.GetTimestamp()
             table.insert(self.delivery.triggeredBy, { playerId = playerKey, timestamp = ts, timeStr = tsStr })
             EventTrigger._saveToModData()
@@ -916,10 +917,9 @@ function EventTriggerDeliveryItemSelectOR:prerender()
     -- ===== LEFT COLUMN: required items to choose from =====
     self:drawText("Choose the item to consume:", self.leftX, self.infoY, 0.8, 0.8, 0.8, 1, UIFont.Small)
 
-    local hasCooldown = (delivery.cooldownType or 0) > 0 and (delivery.cooldownValue or 0) > 0
-    if hasCooldown then
-        local cdText = "Cooldown: " .. (delivery.cooldownType == 1 and "Game Time" or "Real Time") .. " " .. delivery.cooldownValue .. " min"
-        self:drawText(cdText, self.leftX, self.infoY + 20, 0.7, 0.9, 0.7, 1, UIFont.Small)
+    local cdText = EventTrigger.formatCooldown(delivery.cooldown)
+    if cdText ~= "None" then
+        self:drawText("Cooldown: " .. cdText, self.leftX, self.infoY + 20, 0.7, 0.9, 0.7, 1, UIFont.Small)
     end
 
     local reqItems = delivery.requiredItems or {}
@@ -1022,7 +1022,13 @@ end
 EventTrigger.Delivery._setupPending = nil
 
 function EventTrigger.Delivery.StartSetup(x, y, z)
-    EventTrigger.Delivery._setupPending = { x = x, y = y, z = z, requiredItems = {}, rewardItems = {}, maxPlayers = -1, maxPerPlayer = -1, matchMode = "all", cooldownType = 0, cooldownValue = 0 }
+    EventTrigger.Delivery._setupPending = {
+        x = x, y = y, z = z,
+        requiredItems = {}, rewardItems = {},
+        maxPlayers = -1, maxPerPlayer = -1,
+        matchMode = "all",
+        cooldown = { mode = EventTrigger.COOLDOWN_NONE },
+    }
     EventTrigger.Delivery.PromptHintText()
 end
 
@@ -1032,7 +1038,7 @@ function EventTrigger.Delivery.PromptHintText()
     local modal = EventTriggerTextPrompt:new(
         "Delivery Point",
         "Delivery hint text (shown above player head)",
-        "Delivery Point",
+        p.hintText or "Delivery Point",
         function(text)
             p.hintText = (text and #text > 0) and text or "Delivery Point"
             EventTrigger.Delivery.PromptRadius()
@@ -1047,57 +1053,55 @@ end
 function EventTrigger.Delivery.PromptRadius()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
-    local defaultText = tostring(p.radius or 3.0)
-    local modal = EventTriggerTextPrompt:new(
+    local modal = EventTriggerNumberPrompt:new(
         "Trigger Radius",
-        "Trigger radius (tiles, must be > 0)",
-        defaultText,
-        function(text)
-            local radius = tonumber(text) or 3.0
-            if radius <= 0 then radius = 3.0 end
-            p.radius = radius
-            EventTrigger.Delivery.PromptDeliveryLimits()
+        "Trigger radius in tiles (minimum 0.5)",
+        tostring(p.radius or 3.0),
+        function(num)
+            p.radius = num
+            EventTrigger.Delivery.PromptMaxPlayers()
         end,
-        function()
-            EventTrigger.Delivery._setupPending = nil
-        end,
-        function()
-            EventTrigger.Delivery.PromptHintText()
-        end)
+        function() EventTrigger.Delivery._setupPending = nil end,
+        function() EventTrigger.Delivery.PromptHintText() end,
+        { min = 0.5 })
     modal:initialise()
     modal:addToUIManager()
 end
 
-function EventTrigger.Delivery.PromptDeliveryLimits()
+function EventTrigger.Delivery.PromptMaxPlayers()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
-    local defaultText = (p.maxPlayers or -1) .. ", " .. (p.maxPerPlayer or -1)
-    if p._editing then
-        defaultText = string.format("%d, %d", p.maxPlayers or -1, p.maxPerPlayer or -1)
-    else
-        defaultText = "-1, -1"
-    end
-    local modal = EventTriggerTextPrompt:new(
-        "Delivery Limits",
-        "Max Players, Max Per Player (-1=unlimited)\nFormat: N, M\nExample: 5, 1 = first 5 players, once each",
-        defaultText,
-        function(text)
-            local parts = luautils.split(text, ",")
-            local maxPlayers = tonumber(parts[1]) or -1
-            local maxPerPlayer = tonumber(parts[2])
-            if not maxPerPlayer then maxPerPlayer = -1 end
-            if maxPlayers < -1 then maxPlayers = -1 end
-            if maxPerPlayer < -1 then maxPerPlayer = -1 end
-            p.maxPlayers = maxPlayers
-            p.maxPerPlayer = maxPerPlayer
+    local modal = EventTriggerNumberPrompt:new(
+        "Max Players",
+        "Maximum unique players (-1 = unlimited)",
+        tostring(p.maxPlayers or -1),
+        function(num)
+            if num == 0 then num = -1 end
+            p.maxPlayers = num
+            EventTrigger.Delivery.PromptMaxPerPlayer()
+        end,
+        function() EventTrigger.Delivery._setupPending = nil end,
+        function() EventTrigger.Delivery.PromptRadius() end,
+        { integer = true, min = -1 })
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+function EventTrigger.Delivery.PromptMaxPerPlayer()
+    local p = EventTrigger.Delivery._setupPending
+    if not p then return end
+    local modal = EventTriggerNumberPrompt:new(
+        "Max Per Player",
+        "Maximum deliveries per player (-1 = unlimited)",
+        tostring(p.maxPerPlayer or -1),
+        function(num)
+            if num == 0 then num = -1 end
+            p.maxPerPlayer = num
             EventTrigger.Delivery.PromptMatchMode()
         end,
-        function()
-            EventTrigger.Delivery._setupPending = nil
-        end,
-        function()
-            EventTrigger.Delivery.PromptRadius()
-        end)
+        function() EventTrigger.Delivery._setupPending = nil end,
+        function() EventTrigger.Delivery.PromptMaxPlayers() end,
+        { integer = true, min = -1 })
     modal:initialise()
     modal:addToUIManager()
 end
@@ -1105,24 +1109,21 @@ end
 function EventTrigger.Delivery.PromptMatchMode()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
-    local defaultMode = p.matchMode or "all"
-    if not p._editing then defaultMode = "all" end
-    local modal = EventTriggerTextPrompt:new(
+    local choices = {
+        { label = "ALL (require every item)", value = "all" },
+        { label = "ANY (require one item)",    value = "any" },
+    }
+    local modal = EventTriggerChoicePrompt:new(
         "Match Mode",
-        "Match Mode:\n- all = require ALL items (AND logic)\n- any = require ANY one item (OR logic)\n\nEnter 'all' or 'any'",
-        defaultMode,
-        function(text)
-            local mode = string.lower(string.trim(text or ""))
-            if mode ~= "all" and mode ~= "any" then mode = "all" end
-            p.matchMode = mode
+        "Choose how required items are matched",
+        choices,
+        p.matchMode or "all",
+        function(value)
+            p.matchMode = value
             EventTrigger.Delivery.PromptCooldown()
         end,
-        function()
-            EventTrigger.Delivery.PromptDeliveryLimits()
-        end,
-        function()
-            EventTrigger.Delivery._setupPending = nil
-        end)
+        function() EventTrigger.Delivery._setupPending = nil end,
+        function() EventTrigger.Delivery.PromptMaxPerPlayer() end)
     modal:initialise()
     modal:addToUIManager()
 end
@@ -1130,29 +1131,14 @@ end
 function EventTrigger.Delivery.PromptCooldown()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
-    local defaultType = p.cooldownType or 0
-    local defaultValue = p.cooldownValue or 0
-    if not p._editing then defaultType = 0; defaultValue = 0 end
-    local modal = EventTriggerTextPrompt:new(
-        "Cooldown",
-        "Cooldown Settings:\nType: 0=none, 1=game time (minutes), 2=real time (minutes)\nValue: cooldown minutes (0 = no cooldown)\n\nFormat: Type, Value\nExample: 1, 30 = 30 minutes game time cooldown",
-        string.format("%d, %d", defaultType, defaultValue),
-        function(text)
-            local parts = luautils.split(text, ",")
-            local cooldownType = tonumber(parts[1]) or 0
-            local cooldownValue = tonumber(parts[2]) or 0
-            if cooldownType < 0 or cooldownType > 2 then cooldownType = 0 end
-            if cooldownValue < 0 then cooldownValue = 0 end
-            p.cooldownType = cooldownType
-            p.cooldownValue = cooldownValue
+    local modal = EventTriggerCooldownPrompt:new(
+        p.cooldown or { mode = EventTrigger.COOLDOWN_NONE },
+        function(cd)
+            p.cooldown = cd
             EventTrigger.Delivery.PromptRequiredItems()
         end,
-        function()
-            EventTrigger.Delivery.PromptMatchMode()
-        end,
-        function()
-            EventTrigger.Delivery._setupPending = nil
-        end)
+        function() EventTrigger.Delivery._setupPending = nil end,
+        function() EventTrigger.Delivery.PromptMatchMode() end)
     modal:initialise()
     modal:addToUIManager()
 end
@@ -1730,20 +1716,21 @@ function EventTrigger.Delivery.PromptItemQuantity(idx, mode, parentUI)
 
     local item = itemList[idx]
     local defaultText = tostring(item.count or 1)
-    local hintText = "Enter quantity (" .. (item.displayName or "?") .. ")\nPositive integer, minimum 1"
+    local hintText = "Quantity of " .. (item.displayName or "?")
 
-    local modal = EventTriggerTextPrompt:new(
+    local modal = EventTriggerNumberPrompt:new(
         "Item Quantity",
         hintText,
         defaultText,
-        function(text)
-            local count = tonumber(text) or 1
-            if count < 1 then count = 1 end
+        function(count)
             item.count = count
             if parentUI and parentUI.refreshUI then
                 parentUI:refreshUI()
             end
-        end)
+        end,
+        nil,
+        nil,
+        { integer = true, min = 1 })
     modal:initialise()
     modal:addToUIManager()
 end
@@ -1767,8 +1754,7 @@ function EventTrigger.Delivery.PlacePending()
         maxPlayers = p.maxPlayers or -1,
         maxPerPlayer = p.maxPerPlayer or -1,
         matchMode = p.matchMode or "all",
-        cooldownType = p.cooldownType or 0,
-        cooldownValue = p.cooldownValue or 0,
+        cooldown = p.cooldown or { mode = EventTrigger.COOLDOWN_NONE },
         requiredItems = p.requiredItems or {},
         rewardItems = p.rewardItems or {},
         creator = EventTrigger.GetCurrentPlayerId(),
@@ -1776,7 +1762,7 @@ function EventTrigger.Delivery.PlacePending()
 
     dbg("PlacePending: placing delivery at (", p.x, p.y, p.z, "), hint=", p.hintText,
         " reqItems=", #args.requiredItems, " rewardItems=", #args.rewardItems,
-        " matchMode=", args.matchMode, " cooldownType=", args.cooldownType, " cooldownValue=", args.cooldownValue,
+        " matchMode=", args.matchMode, " cooldown=", EventTrigger.formatCooldown(args.cooldown),
         " editing=", tostring(isEditing))
 
     if isEditing then
@@ -1789,8 +1775,7 @@ function EventTrigger.Delivery.PlacePending()
             dp.maxPlayers = p.maxPlayers or -1
             dp.maxPerPlayer = p.maxPerPlayer or -1
             dp.matchMode = p.matchMode or "all"
-            dp.cooldownType = p.cooldownType or 0
-            dp.cooldownValue = p.cooldownValue or 0
+            dp.cooldown = EventTrigger.makeCooldown(p.cooldown or { mode = EventTrigger.COOLDOWN_NONE })
             dp.requiredItems = p.requiredItems or {}
             dp.rewardItems = p.rewardItems or {}
             if EventTrigger.IsMultiplayer() then
@@ -1817,8 +1802,7 @@ function EventTrigger.Delivery.PlacePending()
             maxPlayers = p.maxPlayers or -1,
             maxPerPlayer = p.maxPerPlayer or -1,
             matchMode = p.matchMode or "all",
-            cooldownType = p.cooldownType or 0,
-            cooldownValue = p.cooldownValue or 0,
+            cooldown = EventTrigger.makeCooldown(p.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
             requiredItems = p.requiredItems or {},
             rewardItems = p.rewardItems or {},
             playerDeliveries = {},
@@ -1843,8 +1827,7 @@ function EventTrigger.Delivery.PlacePending()
             maxPlayers = p.maxPlayers or -1,
             maxPerPlayer = p.maxPerPlayer or -1,
             matchMode = p.matchMode or "all",
-            cooldownType = p.cooldownType or 0,
-            cooldownValue = p.cooldownValue or 0,
+            cooldown = EventTrigger.makeCooldown(p.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
             requiredItems = p.requiredItems or {},
             rewardItems = p.rewardItems or {},
             playerDeliveries = {},
@@ -1916,6 +1899,7 @@ function EventTrigger.Delivery.ResetDelivery(dlvIdx, dp)
     dp.triggerCount = 0
     dp.triggeredBy = {}
     dp.playerDeliveries = {}
+    dp.playerCooldowns = {}
     -- MP: inform server
     if EventTrigger.IsMultiplayer() then
         sendClientCommand("EventTrigger", "resetDelivery", { id = dp.id })
@@ -1938,8 +1922,7 @@ function EventTrigger.Delivery.EditDelivery(dlvIdx, dp)
         maxPlayers = dp.maxPlayers or -1,
         maxPerPlayer = dp.maxPerPlayer or -1,
         matchMode = dp.matchMode or "all",
-        cooldownType = dp.cooldownType or 0,
-        cooldownValue = dp.cooldownValue or 0,
+        cooldown = EventTrigger.makeCooldown(dp.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
         requiredItems = EventTrigger.Delivery._cloneItems(dp.requiredItems or {}),
         rewardItems = EventTrigger.Delivery._cloneItems(dp.rewardItems or {}),
         _editing = true,
@@ -2018,9 +2001,9 @@ function EventTriggerDeliveryHistUI:create()
     self.lines[#self.lines + 1] = { x = x, y = y, text = modeText, color = {0.9,0.9,0.3} }
     y = y + rowH
 
-    if dp.cooldownType and dp.cooldownType > 0 and dp.cooldownValue > 0 then
-        local cdText = "Cooldown: " .. (dp.cooldownType == 1 and "Game Time" or "Real Time") .. " " .. dp.cooldownValue .. " min"
-        self.lines[#self.lines + 1] = { x = x, y = y, text = cdText, color = {0.7,0.9,0.7} }
+    local cdText = EventTrigger.formatCooldown(dp.cooldown)
+    if cdText ~= "None" then
+        self.lines[#self.lines + 1] = { x = x, y = y, text = "Cooldown: " .. cdText, color = {0.7,0.9,0.7} }
         y = y + rowH
     end
 
