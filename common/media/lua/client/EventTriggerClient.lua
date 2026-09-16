@@ -190,14 +190,14 @@ end
 
 function EventTrigger.formatCooldown(cd)
     cd = cd or {}
-    if EventTrigger.isCooldownZero(cd) then return "None" end
-    local modeStr = (cd.mode == EventTrigger.COOLDOWN_GAME) and "Game Clock" or "Wall Clock"
+    if EventTrigger.isCooldownZero(cd) then return getText("UI_ET_Cd_None") end
+    local modeStr = (cd.mode == EventTrigger.COOLDOWN_GAME) and getText("UI_ET_Cd_Game") or getText("UI_ET_Cd_Wall")
     local parts = {}
-    if (cd.years or 0) > 0 then parts[#parts + 1] = cd.years .. "y" end
-    if (cd.months or 0) > 0 then parts[#parts + 1] = cd.months .. "mo" end
-    if (cd.days or 0) > 0 then parts[#parts + 1] = cd.days .. "d" end
-    if (cd.hours or 0) > 0 then parts[#parts + 1] = cd.hours .. "h" end
-    if (cd.minutes or 0) > 0 then parts[#parts + 1] = cd.minutes .. "m" end
+    if (cd.years or 0) > 0 then parts[#parts + 1] = cd.years .. getText("UI_ET_Cd_UnitY") end
+    if (cd.months or 0) > 0 then parts[#parts + 1] = cd.months .. getText("UI_ET_Cd_UnitMo") end
+    if (cd.days or 0) > 0 then parts[#parts + 1] = cd.days .. getText("UI_ET_Cd_UnitD") end
+    if (cd.hours or 0) > 0 then parts[#parts + 1] = cd.hours .. getText("UI_ET_Cd_UnitH") end
+    if (cd.minutes or 0) > 0 then parts[#parts + 1] = cd.minutes .. getText("UI_ET_Cd_UnitM") end
     return modeStr .. " " .. table.concat(parts, " ")
 end
 
@@ -223,13 +223,13 @@ EventTrigger.OutputType = {
 
 -- Output type name lookup (for UI display)
 local OutputTypeNames = {
-    [1] = "Named",
-    [2] = "/say",
-    [3] = "/do",
-    [4] = "/low",
-    [5] = "/yell",
-    [6] = "/ooc",
-    [7] = "Above Head",
+    [1] = getText("UI_ET_Out_Named"),
+    [2] = getText("UI_ET_Out_Say"),
+    [3] = getText("UI_ET_Out_Do"),
+    [4] = getText("UI_ET_Out_Low"),
+    [5] = getText("UI_ET_Out_Yell"),
+    [6] = getText("UI_ET_Out_Ooc"),
+    [7] = getText("UI_ET_Out_Halo"),
 }
 
 -- Get stable player identifier (prefer Steam username, fallback "unknown")
@@ -1325,20 +1325,20 @@ function EventTrigger.OnFillWorldObjectContextMenu(playerIndex, context, worldOb
     local square = worldObjects[1] and worldObjects[1]:getSquare()
     if square then
         local x, y, z = square:getX(), square:getY(), square:getZ()
-        local txt = string.format("Place Trigger (%d,%d,%d)", x, y, z)
+        local txt = string.format("%s (%d,%d,%d)", getText("UI_ET_Ctx_PlaceTrigger"), x, y, z)
         context:addOption(txt, nil, function()
             EventTrigger.PromptDelayRange(x, y, z)
         end)
         -- Only offer delivery placement when the delivery module is actually available.
         if EventTrigger.DeliveryLoaded then
-            local dlvTxt = string.format("Set Delivery Point (%d,%d,%d)", x, y, z)
+            local dlvTxt = string.format("%s (%d,%d,%d)", getText("UI_ET_Ctx_SetDelivery"), x, y, z)
             context:addOption(dlvTxt, nil, function()
                 EventTrigger.Delivery.StartSetup(x, y, z)
             end)
         end
     end
 
-    context:addOption("EventTrigger Manager", nil, EventTrigger.OpenUI)
+    context:addOption(getText("UI_ET_Ctx_Manager"), nil, EventTrigger.OpenUI)
 end
 
 -- ============================================================
@@ -1425,33 +1425,36 @@ function EventTriggerTextPrompt:create()
     self.entry:instantiate()
     self:addChild(self.entry)
 
-    local okW = EventTrigger.btnW("OK")
-    local cancelW = EventTrigger.btnW("Cancel")
+    local okLabel = getText("UI_ET_Btn_OK")
+    local cancelLabel = getText("UI_ET_Btn_Cancel")
+    local okW = EventTrigger.btnW(okLabel)
+    local cancelW = EventTrigger.btnW(cancelLabel)
 
     if self.onBackCallback then
-        local backW = EventTrigger.btnW("Back")
+        local backLabel = getText("UI_ET_Btn_Back")
+        local backW = EventTrigger.btnW(backLabel)
         local total = backW + gap + okW + gap + cancelW
         local startX = (self.width - total) / 2
 
-        self.backBtn = ISButton:new(startX, self.btnY, backW, btnH, "Back", self, EventTriggerTextPrompt.onBack)
+        self.backBtn = ISButton:new(startX, self.btnY, backW, btnH, backLabel, self, EventTriggerTextPrompt.onBack)
         self.backBtn:initialise()
         self:addChild(self.backBtn)
 
         local okX = startX + backW + gap
-        self.okBtn = ISButton:new(okX, self.btnY, okW, btnH, "OK", self, EventTriggerTextPrompt.onOk)
+        self.okBtn = ISButton:new(okX, self.btnY, okW, btnH, okLabel, self, EventTriggerTextPrompt.onOk)
         self.okBtn:initialise()
         self:addChild(self.okBtn)
 
-        self.cancelBtn = ISButton:new(okX + okW + gap, self.btnY, cancelW, btnH, "Cancel", self, EventTriggerTextPrompt.onCancel)
+        self.cancelBtn = ISButton:new(okX + okW + gap, self.btnY, cancelW, btnH, cancelLabel, self, EventTriggerTextPrompt.onCancel)
         self.cancelBtn:initialise()
         self:addChild(self.cancelBtn)
     else
         local okX = (self.width - (okW + gap + cancelW)) / 2
-        self.okBtn = ISButton:new(okX, self.btnY, okW, btnH, "OK", self, EventTriggerTextPrompt.onOk)
+        self.okBtn = ISButton:new(okX, self.btnY, okW, btnH, okLabel, self, EventTriggerTextPrompt.onOk)
         self.okBtn:initialise()
         self:addChild(self.okBtn)
 
-        self.cancelBtn = ISButton:new(okX + okW + gap, self.btnY, cancelW, btnH, "Cancel", self, EventTriggerTextPrompt.onCancel)
+        self.cancelBtn = ISButton:new(okX + okW + gap, self.btnY, cancelW, btnH, cancelLabel, self, EventTriggerTextPrompt.onCancel)
         self.cancelBtn:initialise()
         self:addChild(self.cancelBtn)
     end
@@ -1641,8 +1644,8 @@ function EventTriggerChoicePrompt:create()
         bx = bx + bw + 10
         return b
     end
-    if self.onBackCallback then place("Back", EventTriggerChoicePrompt.onBack) end
-    place("Cancel", EventTriggerChoicePrompt.onCancel)
+    if self.onBackCallback then place(getText("UI_ET_Btn_Back"), EventTriggerChoicePrompt.onBack) end
+    place(getText("UI_ET_Btn_Cancel"), EventTriggerChoicePrompt.onCancel)
 end
 
 function EventTriggerChoicePrompt:onChoose(value)
@@ -1744,25 +1747,28 @@ function EventTriggerNumberPrompt:create()
     end
     self:addChild(self.entry)
 
-    local okW = EventTrigger.btnW("OK")
-    local cancelW = EventTrigger.btnW("Cancel")
-    local backW = self.onBackCallback and EventTrigger.btnW("Back") or 0
+    local okLabel = getText("UI_ET_Btn_OK")
+    local cancelLabel = getText("UI_ET_Btn_Cancel")
+    local backLabel = getText("UI_ET_Btn_Back")
+    local okW = EventTrigger.btnW(okLabel)
+    local cancelW = EventTrigger.btnW(cancelLabel)
+    local backW = self.onBackCallback and EventTrigger.btnW(backLabel) or 0
     local gap = 16
     local total = okW + gap + cancelW + (backW > 0 and (gap + backW) or 0)
     local startX = (self.width - total) / 2
 
     local bx = startX
     if backW > 0 then
-        self.backBtn = ISButton:new(bx, self.btnY, backW, self.btnH, "Back", self, EventTriggerNumberPrompt.onBack)
+        self.backBtn = ISButton:new(bx, self.btnY, backW, self.btnH, backLabel, self, EventTriggerNumberPrompt.onBack)
         self.backBtn:initialise()
         self:addChild(self.backBtn)
         bx = bx + backW + gap
     end
-    self.okBtn = ISButton:new(bx, self.btnY, okW, self.btnH, "OK", self, EventTriggerNumberPrompt.onOk)
+    self.okBtn = ISButton:new(bx, self.btnY, okW, self.btnH, okLabel, self, EventTriggerNumberPrompt.onOk)
     self.okBtn:initialise()
     self:addChild(self.okBtn)
     bx = bx + okW + gap
-    self.cancelBtn = ISButton:new(bx, self.btnY, cancelW, self.btnH, "Cancel", self, EventTriggerNumberPrompt.onCancel)
+    self.cancelBtn = ISButton:new(bx, self.btnY, cancelW, self.btnH, cancelLabel, self, EventTriggerNumberPrompt.onCancel)
     self.cancelBtn:initialise()
     self:addChild(self.cancelBtn)
 end
@@ -1813,11 +1819,11 @@ EventTriggerCooldownPrompt.onMouseMove = promptMouseMove
 EventTriggerCooldownPrompt.onMouseUp = promptMouseUp
 
 local COOLDOWN_FIELDS = {
-    { key = "years",   label = "Years" },
-    { key = "months",  label = "Months" },
-    { key = "days",    label = "Days" },
-    { key = "hours",   label = "Hours" },
-    { key = "minutes", label = "Minutes" },
+    { key = "years",   label = getText("UI_ET_Cd_Years") },
+    { key = "months",  label = getText("UI_ET_Cd_Months") },
+    { key = "days",    label = getText("UI_ET_Cd_Days") },
+    { key = "hours",   label = getText("UI_ET_Cd_Hours") },
+    { key = "minutes", label = getText("UI_ET_Cd_Minutes") },
 }
 
 function EventTriggerCooldownPrompt:new(cooldown, onOk, onCancel, onBack)
@@ -1878,11 +1884,11 @@ function EventTriggerCooldownPrompt:create()
 
     -- Mode buttons (fixed width so the selected prefix never overflows)
     local modeDefs = {
-        { EventTrigger.COOLDOWN_NONE, "None" },
-        { EventTrigger.COOLDOWN_WALL, "Wall Clock" },
-        { EventTrigger.COOLDOWN_GAME, "Game Clock" },
+        { EventTrigger.COOLDOWN_NONE, getText("UI_ET_Cd_None") },
+        { EventTrigger.COOLDOWN_WALL, getText("UI_ET_Cd_Wall") },
+        { EventTrigger.COOLDOWN_GAME, getText("UI_ET_Cd_Game") },
     }
-    local modeW = EventTrigger.btnW("Wall Clock") + 24
+    local modeW = EventTrigger.btnW(getText("UI_ET_Cd_Wall")) + 24
     local gap = math.floor(12 * EventTrigger.US)
     local totalW = modeW * 3 + gap * 2
     local mx = (self.width - totalW) / 2
@@ -1918,23 +1924,26 @@ function EventTriggerCooldownPrompt:create()
     end
 
     -- Bottom buttons
-    local okW = EventTrigger.btnW("OK")
-    local cancelW = EventTrigger.btnW("Cancel")
-    local backW = self.onBackCallback and EventTrigger.btnW("Back") or 0
+    local okLabel = getText("UI_ET_Btn_OK")
+    local cancelLabel = getText("UI_ET_Btn_Cancel")
+    local backLabel = getText("UI_ET_Btn_Back")
+    local okW = EventTrigger.btnW(okLabel)
+    local cancelW = EventTrigger.btnW(cancelLabel)
+    local backW = self.onBackCallback and EventTrigger.btnW(backLabel) or 0
     local bgap = 16
     local btotal = okW + bgap + cancelW + (backW > 0 and (bgap + backW) or 0)
     local bx = (self.width - btotal) / 2
     if backW > 0 then
-        self.backBtn = ISButton:new(bx, self.btnY, backW, self.btnH, "Back", self, EventTriggerCooldownPrompt.onBack)
+        self.backBtn = ISButton:new(bx, self.btnY, backW, self.btnH, backLabel, self, EventTriggerCooldownPrompt.onBack)
         self.backBtn:initialise()
         self:addChild(self.backBtn)
         bx = bx + backW + bgap
     end
-    self.okBtn = ISButton:new(bx, self.btnY, okW, self.btnH, "OK", self, EventTriggerCooldownPrompt.onOk)
+    self.okBtn = ISButton:new(bx, self.btnY, okW, self.btnH, okLabel, self, EventTriggerCooldownPrompt.onOk)
     self.okBtn:initialise()
     self:addChild(self.okBtn)
     bx = bx + okW + bgap
-    self.cancelBtn = ISButton:new(bx, self.btnY, cancelW, self.btnH, "Cancel", self, EventTriggerCooldownPrompt.onCancel)
+    self.cancelBtn = ISButton:new(bx, self.btnY, cancelW, self.btnH, cancelLabel, self, EventTriggerCooldownPrompt.onCancel)
     self.cancelBtn:initialise()
     self:addChild(self.cancelBtn)
 
@@ -1950,9 +1959,9 @@ end
 
 function EventTriggerCooldownPrompt:refreshModeButtons()
     local labels = {
-        [EventTrigger.COOLDOWN_NONE] = "None",
-        [EventTrigger.COOLDOWN_WALL] = "Wall Clock",
-        [EventTrigger.COOLDOWN_GAME] = "Game Clock",
+        [EventTrigger.COOLDOWN_NONE] = getText("UI_ET_Cd_None"),
+        [EventTrigger.COOLDOWN_WALL] = getText("UI_ET_Cd_Wall"),
+        [EventTrigger.COOLDOWN_GAME] = getText("UI_ET_Cd_Game"),
     }
     for mode, btn in pairs(self.modeButtons) do
         local prefix = (mode == self.mode) and "> " or "   "
@@ -2005,7 +2014,7 @@ function EventTriggerCooldownPrompt:prerender()
     ISPanel.prerender(self)
     self:drawRectBorder(0, 0, self.width, self.height, 0.9, 0.35, 0.35, 0.35)
     self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
-    self:drawTextCentre("Cooldown", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+    self:drawTextCentre(getText("UI_ET_Cd_Title"), self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
 end
 
 -- ============================================================
@@ -2014,13 +2023,13 @@ end
 -- ============================================================
 -- Output mode choices (shared by place + edit wizards)
 EventTrigger.OUTPUT_CHOICES = {
-    { label = "Named (system channel)", value = EventTrigger.OutputType.NAMED },
-    { label = "/say (with bubble)",     value = EventTrigger.OutputType.SAY },
-    { label = "/do (narration)",        value = EventTrigger.OutputType.DO },
-    { label = "/low (whisper)",         value = EventTrigger.OutputType.LOW },
-    { label = "/yell (shout)",          value = EventTrigger.OutputType.YELL },
-    { label = "/ooc (global)",          value = EventTrigger.OutputType.OOC },
-    { label = "Above Head (halo)",      value = EventTrigger.OutputType.HALO },
+    { label = getText("UI_ET_Out_Named_Desc"), value = EventTrigger.OutputType.NAMED },
+    { label = getText("UI_ET_Out_Say_Desc"),   value = EventTrigger.OutputType.SAY },
+    { label = getText("UI_ET_Out_Do_Desc"),    value = EventTrigger.OutputType.DO },
+    { label = getText("UI_ET_Out_Low_Desc"),   value = EventTrigger.OutputType.LOW },
+    { label = getText("UI_ET_Out_Yell_Desc"), value = EventTrigger.OutputType.YELL },
+    { label = getText("UI_ET_Out_Ooc_Desc"),  value = EventTrigger.OutputType.OOC },
+    { label = getText("UI_ET_Out_Halo_Desc"), value = EventTrigger.OutputType.HALO },
 }
 
 function EventTrigger.PromptDelayRange(x, y, z)
@@ -2042,8 +2051,8 @@ end
 function EventTrigger.PromptDelay()
     local p = EventTrigger._pending
     local modal = EventTriggerNumberPrompt:new(
-        "Delay",
-        "Trigger delay in seconds (0 = instant)",
+        getText("UI_ET_Wiz_Delay"),
+        getText("UI_ET_Wiz_DelayHint"),
         tostring(p.delay or 3),
         function(num)
             p.delay = num
@@ -2059,8 +2068,8 @@ end
 function EventTrigger.PromptRange()
     local p = EventTrigger._pending
     local modal = EventTriggerNumberPrompt:new(
-        "Range",
-        "Trigger radius in tiles (minimum 0.5)",
+        getText("UI_ET_Wiz_Range"),
+        getText("UI_ET_Wiz_RangeHint"),
         tostring(p.range or 2),
         function(num)
             p.range = num
@@ -2076,8 +2085,8 @@ end
 function EventTrigger.PromptMaxTriggers()
     local p = EventTrigger._pending
     local modal = EventTriggerNumberPrompt:new(
-        "Max Triggers",
-        "Maximum trigger count (-1 = unlimited)",
+        getText("UI_ET_Wiz_MaxTriggers"),
+        getText("UI_ET_Wiz_MaxTriggersHint"),
         tostring(p.maxTriggers or -1),
         function(num)
             if num == 0 then num = -1 end
@@ -2096,8 +2105,8 @@ function EventTrigger.PromptMessage2()
     local p = EventTrigger._pending
     local defaultText = (p.msg and #p.msg > 0) and p.msg or "Trigger activated!"
     local modal = EventTriggerTextPrompt:new(
-        "Trigger Message",
-        "Trigger message text",
+        getText("UI_ET_Wiz_Message"),
+        getText("UI_ET_Wiz_MessageHint"),
         defaultText,
         function(text)
             p.msg = text
@@ -2114,8 +2123,8 @@ end
 function EventTrigger.PromptOutput2()
     local p = EventTrigger._pending
     local modal = EventTriggerChoicePrompt:new(
-        "Output Mode",
-        "Choose how the message is shown",
+        getText("UI_ET_Wiz_Output"),
+        getText("UI_ET_Wiz_OutputHint"),
         EventTrigger.OUTPUT_CHOICES,
         p.outputType or EventTrigger.OutputType.SAY,
         function(value)
@@ -2139,8 +2148,8 @@ function EventTrigger.PromptOutputName2()
     local current = p.outputName
     if not current or #current == 0 then current = cfg.outputName end
     local modal = EventTriggerTextPrompt:new(
-        "Named Mode",
-        "Display name for Named mode",
+        getText("UI_ET_Wiz_Named"),
+        getText("UI_ET_Wiz_NamedHint"),
         current,
         function(text)
             p.outputName = text or ""
@@ -2234,8 +2243,8 @@ function EventTrigger.PromptEditMessage(index)
     local t = EventTrigger.triggers[index]
     if not t then return end
     local modal = EventTriggerTextPrompt:new(
-        "Edit Message",
-        "Trigger message text",
+        getText("UI_ET_Edit_Message"),
+        getText("UI_ET_Wiz_MessageHint"),
         t.message,
         function(text)
             EventTrigger.SendCommand("editTriggerMessage", {
@@ -2255,8 +2264,8 @@ function EventTrigger.PromptEditDelay()
     local t = EventTrigger.triggers[idx]
     if not t then return end
     local modal = EventTriggerNumberPrompt:new(
-        "Edit Delay",
-        "Trigger delay in seconds (0 = instant)",
+        getText("UI_ET_Edit_Delay"),
+        getText("UI_ET_Wiz_DelayHint"),
         tostring(t.delay or 3),
         function(num)
             EventTrigger.SendCommand("editTriggerParams", { index = idx, id = t.id, delay = num })
@@ -2275,8 +2284,8 @@ function EventTrigger.PromptEditRange()
     local t = EventTrigger.triggers[idx]
     if not t then return end
     local modal = EventTriggerNumberPrompt:new(
-        "Edit Range",
-        "Trigger radius in tiles (minimum 0.5)",
+        getText("UI_ET_Edit_Range"),
+        getText("UI_ET_Wiz_RangeHint"),
         tostring(t.range or 2),
         function(num)
             EventTrigger.SendCommand("editTriggerParams", { index = idx, id = t.id, range = num })
@@ -2295,8 +2304,8 @@ function EventTrigger.PromptEditMaxTriggers()
     local t = EventTrigger.triggers[idx]
     if not t then return end
     local modal = EventTriggerNumberPrompt:new(
-        "Edit Max Triggers",
-        "Maximum trigger count (-1 = unlimited)",
+        getText("UI_ET_Edit_MaxTriggers"),
+        getText("UI_ET_Wiz_MaxTriggersHint"),
         tostring(t.maxTriggers or -1),
         function(num)
             if num == 0 then num = -1 end
@@ -2317,8 +2326,8 @@ function EventTrigger.PromptEditOutput()
     if not t then return end
     local ot = t.outputType or EventTrigger.OutputType.HALO
     local modal = EventTriggerChoicePrompt:new(
-        "Edit Output",
-        "Choose how the message is shown",
+        getText("UI_ET_Edit_Output"),
+        getText("UI_ET_Wiz_OutputHint"),
         EventTrigger.OUTPUT_CHOICES,
         ot,
         function(value)
@@ -2344,8 +2353,8 @@ function EventTrigger.PromptEditOutputName()
     local current = t.outputName
     if not current or #current == 0 then current = cfg.outputName end
     local modal = EventTriggerTextPrompt:new(
-        "Named Mode",
-        "Display name for Named mode",
+        getText("UI_ET_Wiz_Named"),
+        getText("UI_ET_Wiz_NamedHint"),
         current,
         function(text)
             EventTrigger.SendCommand("editTriggerOutput", {
@@ -2500,16 +2509,16 @@ function EventTriggerUI:create()
         return btn
     end
 
-    self.addDeliveryBtn = placeBtn("Set Delivery Pt", EventTriggerUI.onAddDelivery)
+    self.addDeliveryBtn = placeBtn(getText("UI_ET_Btn_SetDelivery"), EventTriggerUI.onAddDelivery)
     if not EventTrigger.DeliveryLoaded then
         self.addDeliveryBtn:setEnable(false)
-        self.addDeliveryBtn:setTitle("Delivery (unavailable)")
+        self.addDeliveryBtn:setTitle(getText("UI_ET_Btn_DeliveryUnavailable"))
     end
-    self.addBtn = placeBtn("Add Trigger", EventTriggerUI.onAdd)
-    self.disableAllBtn = placeBtn("Disable All", EventTriggerUI.onDisableAll)
-    self.delAllBtn = placeBtn("Delete All", EventTriggerUI.onDeleteAll)
-    self.refreshBtn = placeBtn("Refresh", EventTriggerUI.onRefresh)
-    self.showAllBtn = placeBtn("Show All", EventTriggerUI.onToggleView)
+    self.addBtn = placeBtn(getText("UI_ET_Btn_AddTrigger"), EventTriggerUI.onAdd)
+    self.disableAllBtn = placeBtn(getText("UI_ET_Btn_DisableAll"), EventTriggerUI.onDisableAll)
+    self.delAllBtn = placeBtn(getText("UI_ET_Btn_DeleteAll"), EventTriggerUI.onDeleteAll)
+    self.refreshBtn = placeBtn(getText("UI_ET_Btn_Refresh"), EventTriggerUI.onRefresh)
+    self.showAllBtn = placeBtn(getText("UI_ET_Btn_ShowAll"), EventTriggerUI.onToggleView)
     self.showAllBtn:setVisible(EventTrigger.IsMultiplayer() and EventTrigger.IsAdmin())
 
     -- Pagination buttons (right-aligned in footer, clear of action buttons)
@@ -2684,7 +2693,7 @@ function EventTriggerUI:addRow(entry)
             _bgColor = bgColor,
         }
 
-        local cntStr = completed and "DONE" or "READY"
+        local cntStr = completed and getText("UI_ET_Status_Done") or getText("UI_ET_Status_Ready")
         local cntColor = completed and {0.5,1,0.5} or {1,1,0.3}
         self.rowData[index].cols[#self.rowData[index].cols + 1] = {
             x = colTrig.x + 4, w = colTrig.w, text = EventTrigger.fitText(cntStr, F, colTrig.w - 12), color = cntColor,
@@ -2707,7 +2716,7 @@ function EventTriggerUI:addRow(entry)
         }
         local cntStr = "x" .. (t.triggerCount or 0)
         if exhausted then
-            cntStr = cntStr .. " DONE"
+            cntStr = cntStr .. " " .. getText("UI_ET_Status_Done")
         elseif t.maxTriggers > 0 then
             cntStr = cntStr .. "/" .. t.maxTriggers
         end
@@ -2741,11 +2750,11 @@ function EventTriggerUI:addRow(entry)
     end
 
     local enabled = (t.enabled ~= false)
-    addActionBtn("Edit", EventTriggerUI.onEditRow)
+    addActionBtn(getText("UI_ET_Btn_Edit"), EventTriggerUI.onEditRow)
     addActionBtn("X", EventTriggerUI.onDeleteRow)
-    addActionBtn(enabled and "Disable" or "Enable", EventTriggerUI.onToggleRow)
+    addActionBtn(enabled and getText("UI_ET_Btn_Disable") or getText("UI_ET_Btn_Enable"), EventTriggerUI.onToggleRow)
     addActionBtn("R", EventTriggerUI.onResetRow)
-    addActionBtn("Hist", EventTriggerUI.onHistoryRow)
+    addActionBtn(getText("UI_ET_Btn_Hist"), EventTriggerUI.onHistoryRow)
 end
 
 -- Title bar drag: start drag when clicking title area
@@ -2862,8 +2871,8 @@ end
 -- Requires typing YES (uppercase) to confirm the destructive action.
 function EventTriggerUI:onDeleteAll()
     local modal = EventTriggerTextPrompt:new(
-        "Delete All",
-        "This will delete ALL triggers and cannot be undone.\nType YES (uppercase) to confirm.",
+        getText("UI_ET_Btn_DeleteAll"),
+        getText("UI_ET_DeleteAllConfirm"),
         "",
         function(text)
             if text == "YES" then
@@ -2892,7 +2901,7 @@ end
 -- Button callback: toggle "Show All"/"Show Mine" view
 function EventTriggerUI:onToggleView()
     self.viewAll = not self.viewAll
-    self.showAllBtn:setTitle(self.viewAll and "Show Mine" or "Show All")
+    self.showAllBtn:setTitle(self.viewAll and getText("UI_ET_Btn_ShowMine") or getText("UI_ET_Btn_ShowAll"))
     if EventTrigger.IsMultiplayer() then
         EventTrigger.RequestSync(true)
     end
@@ -2932,13 +2941,21 @@ end
 function EventTriggerUI:prerender()
     ISPanel.prerender(self)
 
-    local headerLabels = { "#", "Position", "Message", "Delay/Range/Output", "Creator", "Triggered", "Actions" }
+    local headerLabels = {
+        getText("UI_ET_Col_Index"),
+        getText("UI_ET_Col_Position"),
+        getText("UI_ET_Col_Message"),
+        getText("UI_ET_Col_Detail"),
+        getText("UI_ET_Col_Creator"),
+        getText("UI_ET_Col_Triggered"),
+        getText("UI_ET_Col_Actions"),
+    }
     local cols = self.cols or self:computeCols()
 
     self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
     self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
 
-    self:drawTextCentre("EventTrigger Manager", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+    self:drawTextCentre(getText("UI_ET_Mgr_Title"), self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
 
     -- Header divider
     local divY = self.listY - 4
@@ -2976,19 +2993,19 @@ function EventTriggerUI:prerender()
 
     -- Empty list hint
     if total == 0 then
-        local txt = "No triggers yet. Right-click ground to place one (admin only)."
+        local txt = getText("UI_ET_EmptyList")
         self:drawTextCentre(txt, self.width / 2, self.listY + 20, 0.45, 0.45, 0.45, 1, UIFont.Small)
     end
 
     -- Pagination indicator (above the pagination buttons in footer)
     if total > rpp then
-        local pgText = string.format("Page %d/%d", self.pageNum + 1, tp)
+        local pgText = getText("UI_ET_Page", self.pageNum + 1, tp)
         self:drawText(pgText, self.width - 130, self.footerY + 8, 0.6, 0.6, 0.6, 1, UIFont.Small)
     end
 
     -- Mode indicator in title bar (left side, clear of close button)
-    local modeText = EventTrigger.IsMultiplayer() and "Server" or "Local"
-    self:drawText("Mode: " .. modeText, 12, 8, 0.5, 0.5, 0.5, 1, UIFont.Small)
+    local modeText = EventTrigger.IsMultiplayer() and getText("UI_ET_Mode_Server") or getText("UI_ET_Mode_Local")
+    self:drawText(modeText, 12, 8, 0.5, 0.5, 0.5, 1, UIFont.Small)
 end
 
 -- EventTriggerUI constructor: create centered main management panel
@@ -3038,25 +3055,25 @@ function EventTriggerHistoryUI:create()
     -- Find trigger, show error if not found
     local t = EventTrigger.triggers[self.triggerIndex]
     if not t then
-        self.lines[#self.lines + 1] = { x = 14, y = y, text = "Trigger not found.", color = {1,0.5,0.5} }
+        self.lines[#self.lines + 1] = { x = 14, y = y, text = getText("UI_ET_Hist_TriggerNotFound"), color = {1,0.5,0.5} }
         return
     end
 
     -- Trigger info — split into separate lines so long messages never overlap
-    self.lines[#self.lines + 1] = { x = 14, y = y, text = EventTrigger.fitText(string.format("Position: (%d,%d,%d)", t.x, t.y, t.z), F, maxW), color = {0.5,0.8,1} }
+    self.lines[#self.lines + 1] = { x = 14, y = y, text = EventTrigger.fitText(getText("UI_ET_Hist_Position", t.x, t.y, t.z), F, maxW), color = {0.5,0.8,1} }
     y = y + 24
-    self.lines[#self.lines + 1] = { x = 14, y = y, text = "Message: " .. EventTrigger.fitText(t.message or "", F, maxW - 90), color = {1,1,1} }
+    self.lines[#self.lines + 1] = { x = 14, y = y, text = getText("UI_ET_Hist_Message", EventTrigger.fitText(t.message or "", F, maxW - 90)), color = {1,1,1} }
     y = y + 24
-    self.lines[#self.lines + 1] = { x = 14, y = y, text = "Creator: " .. EventTrigger.fitText(t.creator or "?", F, maxW - 90), color = {0.8,0.8,0.5} }
+    self.lines[#self.lines + 1] = { x = 14, y = y, text = getText("UI_ET_Hist_Creator", EventTrigger.fitText(t.creator or "?", F, maxW - 90)), color = {0.8,0.8,0.5} }
     y = y + 28
 
     -- Trigger history list
     local triggeredBy = t.triggeredBy or {}
-    self.lines[#self.lines + 1] = { x = 14, y = y, text = "Total: " .. #triggeredBy .. " trigger(s)", color = {1,1,1} }
+    self.lines[#self.lines + 1] = { x = 14, y = y, text = getText("UI_ET_Hist_TotalTriggers", #triggeredBy), color = {1,1,1} }
     y = y + 24
 
     if #triggeredBy == 0 then
-        self.lines[#self.lines + 1] = { x = 14, y = y, text = "No triggers recorded yet.", color = {0.5,0.5,0.5} }
+        self.lines[#self.lines + 1] = { x = 14, y = y, text = getText("UI_ET_Hist_NoTriggers"), color = {0.5,0.5,0.5} }
     else
         -- Display each trigger history entry
         for i, entry in ipairs(triggeredBy) do
@@ -3127,7 +3144,7 @@ function EventTriggerHistoryUI:prerender()
     self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
     self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
 
-    local titleStr = string.format("Trigger #%d - History", self.triggerIndex)
+    local titleStr = getText("UI_ET_Hist_TriggerTitle", self.triggerIndex)
     self:drawTextCentre(titleStr, self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
 
     for _, line in ipairs(self.lines) do

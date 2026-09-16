@@ -139,7 +139,7 @@ end
 -- Full atomic delivery execution
 -- ============================================================
 function EventTrigger.Delivery.Execute(player, deliveryData)
-    if not player or not deliveryData then return false, "Invalid data" end
+    if not player or not deliveryData then return false, getText("UI_ET_Msg_InvalidData") end
     local inventory = player:getInventory()
     local requiredItems = deliveryData.requiredItems or {}
     local rewardItems = deliveryData.rewardItems or {}
@@ -160,14 +160,14 @@ function EventTrigger.Delivery.Execute(player, deliveryData)
             end
         end
         if not hasAny then
-            return false, "Missing required items in backpack!"
+            return false, getText("UI_ET_Msg_MissingItems")
         end
     else
         -- AND logic (default): player needs ALL required items
         for _, req in ipairs(requiredItems) do
             local key = req.fullType .. "|" .. req.displayName
             if (counts[key] or 0) < req.count then
-                return false, "Missing required items in backpack!"
+                return false, getText("UI_ET_Msg_MissingItems")
             end
         end
     end
@@ -191,17 +191,17 @@ function EventTrigger.Delivery.Execute(player, deliveryData)
                 instance:setName(data.displayName)
             end
         end
-        return false, "Not enough backpack space!"
+        return false, getText("UI_ET_Msg_NotEnoughSpace")
     end
 
-    return true, "Delivery completed successfully!"
+    return true, getText("UI_ET_Msg_DeliveryCompleted")
 end
 
 -- ============================================================
 -- Client-side dual-match validation (no inventory changes)
 -- ============================================================
 function EventTrigger.Delivery.Validate(player, deliveryData)
-    if not player or not deliveryData then return false, "Invalid data" end
+    if not player or not deliveryData then return false, getText("UI_ET_Msg_InvalidData") end
     local inventory = player:getInventory()
     local requiredItems = deliveryData.requiredItems or {}
     local matchMode = deliveryData.matchMode or "all"
@@ -218,14 +218,14 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
             end
         end
         if not hasAny then
-            return false, "Missing required items in backpack!"
+            return false, getText("UI_ET_Msg_MissingItems")
         end
     else
         -- AND logic (default): player needs ALL required items
         for _, req in ipairs(requiredItems) do
             local key = req.fullType .. "|" .. req.displayName
             if (counts[key] or 0) < req.count then
-                return false, "Missing required items in backpack!"
+                return false, getText("UI_ET_Msg_MissingItems")
             end
         end
     end
@@ -258,7 +258,7 @@ function EventTrigger.Delivery.CheckCooldown(player, deliveryData)
     local now = EventTrigger.cooldownNowSeconds(cooldown.mode)
     local total = EventTrigger.cooldownDurationSeconds(cooldown)
     if (now - lastDelivery) < total then
-        return false, "Cooldown active! " .. EventTrigger.formatCooldown(cooldown)
+        return false, getText("UI_ET_Msg_CooldownActive", EventTrigger.formatCooldown(cooldown))
     end
 
     return true, ""
@@ -359,16 +359,18 @@ function EventTriggerDeliveryPrompt:create()
 
     local bh = 34
     local gap = 24
-    local yesW = EventTrigger.btnW("Yes")
-    local noW = EventTrigger.btnW("No")
+    local yesLabel = getText("UI_ET_Btn_Yes")
+    local noLabel = getText("UI_ET_Btn_No")
+    local yesW = EventTrigger.btnW(yesLabel)
+    local noW = EventTrigger.btnW(noLabel)
     local btnY = self.height - bh - 16
     local yesX = (self.width - (yesW + gap + noW)) / 2
 
-    self.yesBtn = ISButton:new(yesX, btnY, yesW, bh, "Yes", self, EventTriggerDeliveryPrompt.onYes)
+    self.yesBtn = ISButton:new(yesX, btnY, yesW, bh, yesLabel, self, EventTriggerDeliveryPrompt.onYes)
     self.yesBtn:initialise()
     self:addChild(self.yesBtn)
 
-    self.noBtn = ISButton:new(yesX + yesW + gap, btnY, noW, bh, "No", self, EventTriggerDeliveryPrompt.onNo)
+    self.noBtn = ISButton:new(yesX + yesW + gap, btnY, noW, bh, noLabel, self, EventTriggerDeliveryPrompt.onNo)
     self.noBtn:initialise()
     self:addChild(self.noBtn)
 
@@ -438,10 +440,10 @@ function EventTriggerDeliveryPrompt:prerender()
     ISPanel.prerender(self)
     self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
     self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
-    self:drawTextCentre("Delivery Prompt", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+    self:drawTextCentre(getText("UI_ET_Dlv_PromptTitle"), self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
 
-    local hint = self.dp and self.dp.hintText or "Delivery Point"
-    local promptText = "Delivery point detected:\n\"" .. hint .. "\"\n\nProceed with delivery?"
+    local hint = self.dp and self.dp.hintText or getText("UI_ET_Dlv_Point")
+    local promptText = getText("UI_ET_Dlv_Detected", hint)
     local y = 28 + math.floor(18 * EventTrigger.US)
     for line in (promptText .. "\n"):gmatch("([^\n]*)\n") do
         if line and #line > 0 then
@@ -515,16 +517,18 @@ function EventTriggerDeliveryConfirm:create()
 
     local bh = 34
     local gap = 24
-    local confirmW = EventTrigger.btnW("Confirm")
-    local cancelW = EventTrigger.btnW("Cancel")
+    local confirmLabel = getText("UI_ET_Btn_Confirm")
+    local cancelLabel = getText("UI_ET_Btn_Cancel")
+    local confirmW = EventTrigger.btnW(confirmLabel)
+    local cancelW = EventTrigger.btnW(cancelLabel)
     local btnY = self.height - bh - 16
     local confX = (self.width - (confirmW + gap + cancelW)) / 2
 
-    self.confirmBtn = ISButton:new(confX, btnY, confirmW, bh, "Confirm", self, EventTriggerDeliveryConfirm.onConfirm)
+    self.confirmBtn = ISButton:new(confX, btnY, confirmW, bh, confirmLabel, self, EventTriggerDeliveryConfirm.onConfirm)
     self.confirmBtn:initialise()
     self:addChild(self.confirmBtn)
 
-    self.cancelBtn = ISButton:new(confX + confirmW + gap, btnY, cancelW, bh, "Cancel", self, EventTriggerDeliveryConfirm.onCancel)
+    self.cancelBtn = ISButton:new(confX + confirmW + gap, btnY, cancelW, bh, cancelLabel, self, EventTriggerDeliveryConfirm.onCancel)
     self.cancelBtn:initialise()
     self:addChild(self.cancelBtn)
 
@@ -652,7 +656,7 @@ function EventTriggerDeliveryConfirm:prerender()
     ISPanel.prerender(self)
     self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
     self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
-    self:drawTextCentre("Delivery Confirmation", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+    self:drawTextCentre(getText("UI_ET_Dlv_ConfirmTitle"), self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
 
     local delivery = self.delivery
     if not delivery then return end
@@ -667,25 +671,27 @@ function EventTriggerDeliveryConfirm:prerender()
     local y = self.itemY
 
     -- Show match mode and cooldown info
-    local modeText = "Match Mode: " .. (delivery.matchMode == "any" and "ANY (OR logic)" or "ALL (AND logic)")
+    local modeStr = (delivery.matchMode == "any") and getText("UI_ET_Dlv_Any") or getText("UI_ET_Dlv_All")
+    local modeText = getText("UI_ET_Dlv_MatchModeLabel", modeStr)
     self:drawText(modeText, leftX, y, 0.9, 0.9, 0.3, 1, UIFont.Small)
     y = y + rowH
 
-    local cdText = EventTrigger.formatCooldown(delivery.cooldown)
-    if cdText ~= "None" then
-        self:drawText("Cooldown: " .. cdText, leftX, y, 0.7, 0.9, 0.7, 1, UIFont.Small)
+    local cd = delivery.cooldown or {}
+    if not EventTrigger.isCooldownZero(cd) then
+        local cdText = getText("UI_ET_Dlv_CooldownLabel", EventTrigger.formatCooldown(cd))
+        self:drawText(cdText, leftX, y, 0.7, 0.9, 0.7, 1, UIFont.Small)
         y = y + rowH
     end
 
     -- Left: Required Items
-    self:drawText("--- Required Items ---", leftX, y, 0.9, 0.7, 0.3, 1, UIFont.Small)
+    self:drawText(getText("UI_ET_Dlv_RequiredItems"), leftX, y, 0.9, 0.7, 0.3, 1, UIFont.Small)
     y = y + rowH
     local reqItems = delivery.requiredItems or {}
     if #reqItems == 0 then
-        self:drawText("(none)", leftX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
+        self:drawText(getText("UI_ET_Inv_None"), leftX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
     else
         for _, req in ipairs(reqItems) do
-            local collectStr = (req.collect ~= false) and " (collect)" or " (check only)"
+            local collectStr = (req.collect ~= false) and getText("UI_ET_Dlv_CollectSuffix") or getText("UI_ET_Dlv_CheckOnlySuffix")
             local txt = fitText(req.displayName .. "  x" .. tostring(req.count) .. collectStr, UIFont.Small, reqColW)
             local color = (req.collect ~= false) and {1, 1, 1} or {0.7, 0.9, 0.7}
             self:drawText(txt, leftX + 8, y, color[1], color[2], color[3], 1, UIFont.Small)
@@ -696,11 +702,11 @@ function EventTriggerDeliveryConfirm:prerender()
 
     -- Right: Reward Items
     y = self.itemY
-    self:drawText("--- Reward Items ---", rightX, y, 0.3, 0.9, 0.5, 1, UIFont.Small)
+    self:drawText(getText("UI_ET_Dlv_RewardItems"), rightX, y, 0.3, 0.9, 0.5, 1, UIFont.Small)
     y = y + rowH
     local rewItems = delivery.rewardItems or {}
     if #rewItems == 0 then
-        self:drawText("(none)", rightX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
+        self:drawText(getText("UI_ET_Inv_None"), rightX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
     else
         for _, rew in ipairs(rewItems) do
             local txt = fitText(rew.displayName .. "  x" .. tostring(rew.count), UIFont.Small, rewColW)
@@ -777,15 +783,17 @@ function EventTriggerDeliveryItemSelectOR:create()
     local bh = 34
     local gap = 24
     local btnY = self.height - bh - 18
-    local confirmW = EventTrigger.btnW("Confirm")
-    local cancelW = EventTrigger.btnW("Cancel")
+    local confirmLabel = getText("UI_ET_Btn_Confirm")
+    local cancelLabel = getText("UI_ET_Btn_Cancel")
+    local confirmW = EventTrigger.btnW(confirmLabel)
+    local cancelW = EventTrigger.btnW(cancelLabel)
     local confX = (self.width - (confirmW + gap + cancelW)) / 2
 
-    self.confirmBtn = ISButton:new(confX, btnY, confirmW, bh, "Confirm", self, EventTriggerDeliveryItemSelectOR.onConfirm)
+    self.confirmBtn = ISButton:new(confX, btnY, confirmW, bh, confirmLabel, self, EventTriggerDeliveryItemSelectOR.onConfirm)
     self.confirmBtn:initialise()
     self:addChild(self.confirmBtn)
 
-    self.cancelBtn = ISButton:new(confX + confirmW + gap, btnY, cancelW, bh, "Cancel", self, EventTriggerDeliveryItemSelectOR.onCancel)
+    self.cancelBtn = ISButton:new(confX + confirmW + gap, btnY, cancelW, bh, cancelLabel, self, EventTriggerDeliveryItemSelectOR.onCancel)
     self.cancelBtn:initialise()
     self:addChild(self.cancelBtn)
 
@@ -824,7 +832,7 @@ end
 
 function EventTriggerDeliveryItemSelectOR:onConfirm()
     if not self.selectedItemIndex then
-        HaloTextHelper.addBadText(getPlayer(), "Please select an item to use!")
+        HaloTextHelper.addBadText(getPlayer(), getText("UI_ET_Msg_PleaseSelect"))
         return
     end
     
@@ -906,7 +914,7 @@ function EventTriggerDeliveryItemSelectOR:prerender()
     ISPanel.prerender(self)
     self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
     self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
-    self:drawTextCentre("Select Item for Delivery", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+    self:drawTextCentre(getText("UI_ET_Dlv_SelectTitle"), self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
 
     local delivery = self.delivery
     if not delivery then return end
@@ -915,16 +923,17 @@ function EventTriggerDeliveryItemSelectOR:prerender()
     self:drawRect(self.midX, self.listStartY - 8, 1, self.height - self.listStartY - 70, 0.35, 0.35, 0.35, 0.35)
 
     -- ===== LEFT COLUMN: required items to choose from =====
-    self:drawText("Choose the item to consume:", self.leftX, self.infoY, 0.8, 0.8, 0.8, 1, UIFont.Small)
+    self:drawText(getText("UI_ET_Dlv_ChooseItem"), self.leftX, self.infoY, 0.8, 0.8, 0.8, 1, UIFont.Small)
 
-    local cdText = EventTrigger.formatCooldown(delivery.cooldown)
-    if cdText ~= "None" then
-        self:drawText("Cooldown: " .. cdText, self.leftX, self.infoY + 20, 0.7, 0.9, 0.7, 1, UIFont.Small)
+    local cd = delivery.cooldown or {}
+    if not EventTrigger.isCooldownZero(cd) then
+        local cdText = getText("UI_ET_Dlv_CooldownLabel", EventTrigger.formatCooldown(cd))
+        self:drawText(cdText, self.leftX, self.infoY + 20, 0.7, 0.9, 0.7, 1, UIFont.Small)
     end
 
     local reqItems = delivery.requiredItems or {}
     if #reqItems == 0 then
-        self:drawText("(no items)", self.leftX, self.listStartY + 4, 0.5, 0.5, 0.5, 1, UIFont.Small)
+        self:drawText(getText("UI_ET_Inv_NoItems"), self.leftX, self.listStartY + 4, 0.5, 0.5, 0.5, 1, UIFont.Small)
     else
         for idx, req in ipairs(reqItems) do
             local iy = self.listStartY + (idx - 1) * self.rowH
@@ -959,12 +968,12 @@ function EventTriggerDeliveryItemSelectOR:prerender()
     end
 
     -- ===== RIGHT COLUMN: rewards (read-only list) =====
-    self:drawText("Rewards:", self.rightX, self.infoY, 0.4, 0.9, 0.5, 1, UIFont.Small)
+    self:drawText(getText("UI_ET_Dlv_Rewards"), self.rightX, self.infoY, 0.4, 0.9, 0.5, 1, UIFont.Small)
 
     local rewItems = delivery.rewardItems or {}
     local ry = self.listStartY
     if #rewItems == 0 then
-        self:drawText("(none)", self.rightX + 4, ry + 4, 0.5, 0.5, 0.5, 1, UIFont.Small)
+        self:drawText(getText("UI_ET_Inv_None"), self.rightX + 4, ry + 4, 0.5, 0.5, 0.5, 1, UIFont.Small)
     else
         for _, rew in ipairs(rewItems) do
             local txt = fitText((rew.displayName or "?") .. "  x" .. tostring(rew.count), UIFont.Small, self.rightW - 8)
@@ -1036,11 +1045,11 @@ function EventTrigger.Delivery.PromptHintText()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local modal = EventTriggerTextPrompt:new(
-        "Delivery Point",
-        "Delivery hint text (shown above player head)",
-        p.hintText or "Delivery Point",
+        getText("UI_ET_Dlv_Point"),
+        getText("UI_ET_Dlv_Hint"),
+        p.hintText or getText("UI_ET_Dlv_Point"),
         function(text)
-            p.hintText = (text and #text > 0) and text or "Delivery Point"
+            p.hintText = (text and #text > 0) and text or getText("UI_ET_Dlv_Point")
             EventTrigger.Delivery.PromptRadius()
         end,
         function()
@@ -1054,8 +1063,8 @@ function EventTrigger.Delivery.PromptRadius()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local modal = EventTriggerNumberPrompt:new(
-        "Trigger Radius",
-        "Trigger radius in tiles (minimum 0.5)",
+        getText("UI_ET_Dlv_Radius"),
+        getText("UI_ET_Dlv_RadiusHint"),
         tostring(p.radius or 3.0),
         function(num)
             p.radius = num
@@ -1072,8 +1081,8 @@ function EventTrigger.Delivery.PromptMaxPlayers()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local modal = EventTriggerNumberPrompt:new(
-        "Max Players",
-        "Maximum unique players (-1 = unlimited)",
+        getText("UI_ET_Dlv_MaxPlayers"),
+        getText("UI_ET_Dlv_MaxPlayersHint"),
         tostring(p.maxPlayers or -1),
         function(num)
             if num == 0 then num = -1 end
@@ -1091,8 +1100,8 @@ function EventTrigger.Delivery.PromptMaxPerPlayer()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local modal = EventTriggerNumberPrompt:new(
-        "Max Per Player",
-        "Maximum deliveries per player (-1 = unlimited)",
+        getText("UI_ET_Dlv_MaxPerPlayer"),
+        getText("UI_ET_Dlv_MaxPerPlayerHint"),
         tostring(p.maxPerPlayer or -1),
         function(num)
             if num == 0 then num = -1 end
@@ -1110,12 +1119,12 @@ function EventTrigger.Delivery.PromptMatchMode()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local choices = {
-        { label = "ALL (require every item)", value = "all" },
-        { label = "ANY (require one item)",    value = "any" },
+        { label = getText("UI_ET_Dlv_MatchAll"), value = "all" },
+        { label = getText("UI_ET_Dlv_MatchAny"), value = "any" },
     }
     local modal = EventTriggerChoicePrompt:new(
-        "Match Mode",
-        "Choose how required items are matched",
+        getText("UI_ET_Dlv_MatchMode"),
+        getText("UI_ET_Dlv_MatchModeHint"),
         choices,
         p.matchMode or "all",
         function(value)
@@ -1192,8 +1201,9 @@ function EventTriggerDeliveryItemSelect:create()
     self:addChild(self.closeBtn)
 
     -- Done / Next button (right-aligned, true width)
-    local doneW = EventTrigger.btnW("Done / Next")
-    self.doneBtn = ISButton:new(self.width - doneW - 14, self.height - 42, doneW, 32, "Done / Next", self, EventTriggerDeliveryItemSelect.onDone)
+    local doneLabel = getText("UI_ET_Btn_DoneNext")
+    local doneW = EventTrigger.btnW(doneLabel)
+    self.doneBtn = ISButton:new(self.width - doneW - 14, self.height - 42, doneW, 32, doneLabel, self, EventTriggerDeliveryItemSelect.onDone)
     self.doneBtn:initialise()
     self:addChild(self.doneBtn)
 
@@ -1208,9 +1218,9 @@ function EventTriggerDeliveryItemSelect:create()
         bx = bx + bw + 10
         return btn
     end
-    self.backBtn = placeLeft("Back", EventTriggerDeliveryItemSelect.onBack)
-    placeLeft("Cancel", EventTriggerDeliveryItemSelect.onCancel)
-    self.refreshBtn = placeLeft("Refresh", EventTriggerDeliveryItemSelect.onRefresh)
+    self.backBtn = placeLeft(getText("UI_ET_Btn_Back"), EventTriggerDeliveryItemSelect.onBack)
+    placeLeft(getText("UI_ET_Btn_Cancel"), EventTriggerDeliveryItemSelect.onCancel)
+    self.refreshBtn = placeLeft(getText("UI_ET_Btn_Refresh"), EventTriggerDeliveryItemSelect.onRefresh)
 
     -- Layout params (two-column: left=list, right=selected)
     self.contentY = 36
@@ -1288,7 +1298,7 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
     local headingH = 22
 
     -- Heading
-    local titleStr = "Inventory  (Pg " .. (self.leftPage + 1) .. "/" .. self.totalPages .. ")"
+    local titleStr = getText("UI_ET_Inv_Title") .. "  (" .. getText("UI_ET_Inv_Page", self.leftPage + 1, self.totalPages) .. ")"
     local heading = ISLabel:new(x, startY, 20, titleStr, 0.55, 0.8, 1, 1, UIFont.Small, true)
     heading:initialise()
     self:addChild(heading)
@@ -1359,15 +1369,15 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
         end
 
         if found then
-            local remBtn = makeRightBtn("Remove", EventTriggerDeliveryItemSelect.onRemoveItem, data.fullType, nil, rightEdge)
-            makeRightBtn("Qty", EventTriggerDeliveryItemSelect.onQtyItem, data.fullType, nil, remBtn.x - gap)
+            local remBtn = makeRightBtn(getText("UI_ET_Inv_Remove"), EventTriggerDeliveryItemSelect.onRemoveItem, data.fullType, nil, rightEdge)
+            makeRightBtn(getText("UI_ET_Inv_Qty"), EventTriggerDeliveryItemSelect.onQtyItem, data.fullType, nil, remBtn.x - gap)
         else
-            makeRightBtn("Add", EventTriggerDeliveryItemSelect.onAddItem, data.fullType, data.displayName, rightEdge)
+            makeRightBtn(getText("UI_ET_Inv_Add"), EventTriggerDeliveryItemSelect.onAddItem, data.fullType, data.displayName, rightEdge)
         end
     end
 
     if #self.inventoryData == 0 then
-        local emptyLbl = ISLabel:new(x + 4, rowStartY + 8, 18, "(inventory empty)", 0.5, 0.5, 0.5, 1, UIFont.Small, true)
+        local emptyLbl = ISLabel:new(x + 4, rowStartY + 8, 18, getText("UI_ET_Inv_Empty"), 0.5, 0.5, 0.5, 1, UIFont.Small, true)
         emptyLbl:initialise()
         self:addChild(emptyLbl)
         table.insert(self.rowChildren, emptyLbl)
@@ -1418,7 +1428,7 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
     local headingH = 22
 
     -- Heading
-    local titleStr = "Selected  (Pg " .. (self.rightPage + 1) .. "/" .. selTotal .. ")"
+    local titleStr = getText("UI_ET_Inv_Selected") .. "  (" .. getText("UI_ET_Inv_Page", self.rightPage + 1, selTotal) .. ")"
     local heading = ISLabel:new(x, startY, 20, titleStr, 0.85, 0.85, 0.5, 1, UIFont.Small, true)
     heading:initialise()
     self:addChild(heading)
@@ -1438,7 +1448,7 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
     end
 
     if #itemList == 0 then
-        local noneLbl = ISLabel:new(x + 4, startY + headingH + 8, 18, "(none selected)", 0.45, 0.45, 0.45, 1, UIFont.Small, true)
+        local noneLbl = ISLabel:new(x + 4, startY + headingH + 8, 18, getText("UI_ET_Inv_NoneSelected"), 0.45, 0.45, 0.45, 1, UIFont.Small, true)
         noneLbl:initialise()
         self:addChild(noneLbl)
         table.insert(self.selectedChildren, noneLbl)
@@ -1480,8 +1490,8 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
             return btn
         end
 
-        local delBtn = makeRightBtn("Remove", EventTriggerDeliveryItemSelect.onDelItem, rightEdge)
-        makeRightBtn("Qty", EventTriggerDeliveryItemSelect.onEditQty, delBtn.x - gap)
+        local delBtn = makeRightBtn(getText("UI_ET_Inv_Remove"), EventTriggerDeliveryItemSelect.onDelItem, rightEdge)
+        makeRightBtn(getText("UI_ET_Inv_Qty"), EventTriggerDeliveryItemSelect.onEditQty, delBtn.x - gap)
 
         -- Bottom row: FullType (left) + Collect checkbox (right, required only)
         local ftW = isRequired and (self.rightW - 120) or (self.rightW - 20)
@@ -1493,7 +1503,8 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
 
         if isRequired then
             local collect = si.collect ~= false
-            local collectW = getTextManager():MeasureStringX(UIFont.Small, "Collect")
+            local collectLabel = getText("UI_ET_Inv_Collect")
+            local collectW = getTextManager():MeasureStringX(UIFont.Small, collectLabel)
             local cbX = x + self.rightW - collectW - 26
             local cbY = y + 26
             local collectCB = ISTickBox:new(cbX, cbY, 18, 18, "", self, function()
@@ -1505,7 +1516,7 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
             self:addChild(collectCB)
             table.insert(self.selectedChildren, collectCB)
 
-            local collectLbl = ISLabel:new(cbX + 22, cbY, 18, "Collect", 0.7, 0.9, 0.7, 1, UIFont.Small, true)
+            local collectLbl = ISLabel:new(cbX + 22, cbY, 18, collectLabel, 0.7, 0.9, 0.7, 1, UIFont.Small, true)
             collectLbl:initialise()
             self:addChild(collectLbl)
             table.insert(self.selectedChildren, collectLbl)
@@ -1716,10 +1727,10 @@ function EventTrigger.Delivery.PromptItemQuantity(idx, mode, parentUI)
 
     local item = itemList[idx]
     local defaultText = tostring(item.count or 1)
-    local hintText = "Quantity of " .. (item.displayName or "?")
+    local hintText = getText("UI_ET_Inv_Quantity", (item.displayName or "?"))
 
     local modal = EventTriggerNumberPrompt:new(
-        "Item Quantity",
+        getText("UI_ET_Inv_ItemQuantity"),
         hintText,
         defaultText,
         function(count)
@@ -1999,51 +2010,54 @@ function EventTriggerDeliveryHistUI:create()
     local y = 28 + math.floor(18 * EventTrigger.US)
 
     if not dp then
-        self.lines[#self.lines + 1] = { x = x, y = y, text = "Delivery point not found.", color = {1,0.5,0.5} }
+        self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_DeliveryNotFound"), color = {1,0.5,0.5} }
         return
     end
 
-    self.lines[#self.lines + 1] = { x = x, y = y, text = fitText(string.format("Position: (%d,%d,%d)", dp.x, dp.y, dp.z), F, maxW), color = {0.5,0.8,1} }
+    self.lines[#self.lines + 1] = { x = x, y = y, text = fitText(getText("UI_ET_Hist_Position", dp.x, dp.y, dp.z), F, maxW), color = {0.5,0.8,1} }
     y = y + rowH
-    self.lines[#self.lines + 1] = { x = x, y = y, text = fitText("Hint: " .. (dp.hintText or ""), F, maxW - 60), color = {0.8,0.8,1} }
+    self.lines[#self.lines + 1] = { x = x, y = y, text = fitText(getText("UI_ET_Hist_Hint", (dp.hintText or "")), F, maxW - 60), color = {0.8,0.8,1} }
     y = y + rowH
-    self.lines[#self.lines + 1] = { x = x, y = y, text = fitText("Creator: " .. (dp.creator or "?"), F, maxW - 80), color = {0.8,0.8,0.5} }
+    self.lines[#self.lines + 1] = { x = x, y = y, text = fitText(getText("UI_ET_Hist_Creator", (dp.creator or "?")), F, maxW - 80), color = {0.8,0.8,0.5} }
     y = y + rowH
-    self.lines[#self.lines + 1] = { x = x, y = y, text = string.format("Range: %.1f  Status: %s", dp.range or 3, (dp.triggerCount or 0) > 0 and "Completed" or "Ready"), color = {1,1,1} }
+    local statusStr = (dp.triggerCount or 0) > 0 and getText("UI_ET_Dlv_Completed") or getText("UI_ET_Dlv_Ready")
+    self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_RangeStatus", (dp.range or 3), statusStr), color = {1,1,1} }
     y = y + rowH
 
     -- Match mode and cooldown
-    local modeText = "Match Mode: " .. (dp.matchMode == "any" and "ANY (OR logic)" or "ALL (AND logic)")
+    local modeStr = (dp.matchMode == "any") and getText("UI_ET_Dlv_Any") or getText("UI_ET_Dlv_All")
+    local modeText = getText("UI_ET_Dlv_MatchModeLabel", modeStr)
     self.lines[#self.lines + 1] = { x = x, y = y, text = modeText, color = {0.9,0.9,0.3} }
     y = y + rowH
 
-    local cdText = EventTrigger.formatCooldown(dp.cooldown)
-    if cdText ~= "None" then
-        self.lines[#self.lines + 1] = { x = x, y = y, text = "Cooldown: " .. cdText, color = {0.7,0.9,0.7} }
+    local cd = dp.cooldown or {}
+    if not EventTrigger.isCooldownZero(cd) then
+        local cdText = getText("UI_ET_Dlv_CooldownLabel", EventTrigger.formatCooldown(cd))
+        self.lines[#self.lines + 1] = { x = x, y = y, text = cdText, color = {0.7,0.9,0.7} }
         y = y + rowH
     end
 
     if dp.maxPlayers and dp.maxPlayers > 0 then
-        self.lines[#self.lines + 1] = { x = x, y = y, text = "Max Players: " .. dp.maxPlayers, color = {0.8,0.8,1} }
+        self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_MaxPlayers", dp.maxPlayers), color = {0.8,0.8,1} }
         y = y + rowH
     end
     if dp.maxPerPlayer and dp.maxPerPlayer > 0 then
-        self.lines[#self.lines + 1] = { x = x, y = y, text = "Max Per Player: " .. dp.maxPerPlayer, color = {0.8,0.8,1} }
+        self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_MaxPerPlayer", dp.maxPerPlayer), color = {0.8,0.8,1} }
         y = y + rowH
     end
 
     y = y + 6
 
     -- Required items
-    self.lines[#self.lines + 1] = { x = x, y = y, text = "--- Required Items ---", color = {0.9,0.7,0.3} }
+    self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_RequiredItems"), color = {0.9,0.7,0.3} }
     y = y + rowH
     local reqItems = dp.requiredItems or {}
     if #reqItems == 0 then
-        self.lines[#self.lines + 1] = { x = x + 8, y = y, text = "(none)", color = {0.5,0.5,0.5} }
+        self.lines[#self.lines + 1] = { x = x + 8, y = y, text = getText("UI_ET_Inv_None"), color = {0.5,0.5,0.5} }
         y = y + rowH
     else
         for _, item in ipairs(reqItems) do
-            local collectStr = (item.collect ~= false) and " (collect)" or " (check only)"
+            local collectStr = (item.collect ~= false) and getText("UI_ET_Dlv_CollectSuffix") or getText("UI_ET_Dlv_CheckOnlySuffix")
             local txt = fitText(item.displayName .. " x" .. tostring(item.count) .. collectStr .. "  [" .. item.fullType .. "]", F, maxW - 20)
             self.lines[#self.lines + 1] = { x = x + 8, y = y, text = txt, color = {1,1,1} }
             y = y + rowH
@@ -2051,11 +2065,11 @@ function EventTriggerDeliveryHistUI:create()
     end
 
     y = y + 6
-    self.lines[#self.lines + 1] = { x = x, y = y, text = "--- Reward Items ---", color = {0.3,0.9,0.5} }
+    self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_RewardItems"), color = {0.3,0.9,0.5} }
     y = y + rowH
     local rewItems = dp.rewardItems or {}
     if #rewItems == 0 then
-        self.lines[#self.lines + 1] = { x = x + 8, y = y, text = "(none)", color = {0.5,0.5,0.5} }
+        self.lines[#self.lines + 1] = { x = x + 8, y = y, text = getText("UI_ET_Inv_None"), color = {0.5,0.5,0.5} }
         y = y + rowH
     else
         for _, item in ipairs(rewItems) do
@@ -2068,7 +2082,7 @@ function EventTriggerDeliveryHistUI:create()
     -- Trigger history
     y = y + 6
     local trigBy = dp.triggeredBy or {}
-    self.lines[#self.lines + 1] = { x = x, y = y, text = "Total deliveries: " .. #trigBy, color = {1,1,1} }
+    self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_TotalDeliveries", #trigBy), color = {1,1,1} }
     y = y + rowH
     for i, entry in ipairs(trigBy) do
         local pId, tStr
@@ -2130,7 +2144,7 @@ function EventTriggerDeliveryHistUI:prerender()
     ISPanel.prerender(self)
     self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
     self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
-    self:drawTextCentre("Delivery Point Details", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+    self:drawTextCentre(getText("UI_ET_Hist_DeliveryDetails"), self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
     for _, line in ipairs(self.lines) do
         self:drawText(line.text, line.x, line.y, line.color[1], line.color[2], line.color[3], 1, UIFont.Small)
     end
