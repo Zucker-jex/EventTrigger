@@ -356,7 +356,11 @@ Server.onClientCommand = function(module, command, player, args)
             maxPerPlayer  = args.maxPerPlayer or -1,
             requiredItems = args.requiredItems or {},
             rewardItems   = args.rewardItems or {},
+            matchMode     = args.matchMode or "all",
+            cooldownType  = args.cooldownType or 0,
+            cooldownValue = args.cooldownValue or 0,
             playerDeliveries = {},
+            playerCooldowns = {},
             creator       = pid,
             triggerCount  = 0,
             triggeredBy   = {},
@@ -417,6 +421,9 @@ Server.onClientCommand = function(module, command, player, args)
                 if args.maxPerPlayer ~= nil then dp.maxPerPlayer = math.max(-1, args.maxPerPlayer) end
                 if args.requiredItems ~= nil then dp.requiredItems = args.requiredItems end
                 if args.rewardItems ~= nil then dp.rewardItems = args.rewardItems end
+                if args.matchMode ~= nil then dp.matchMode = args.matchMode end
+                if args.cooldownType ~= nil then dp.cooldownType = args.cooldownType end
+                if args.cooldownValue ~= nil then dp.cooldownValue = args.cooldownValue end
                 Persistence.saveOneDeliveryPoint(dp)
                 Logger:info("Delivery edited: id=%s by %s", dp.id, pid)
                 broadcastAll()

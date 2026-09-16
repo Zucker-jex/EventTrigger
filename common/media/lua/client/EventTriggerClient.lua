@@ -640,7 +640,11 @@ function EventTrigger.OnServerCommand(module, command, args)
                         maxPerPlayer  = src.maxPerPlayer or -1,
                         requiredItems = src.requiredItems or {},
                         rewardItems   = src.rewardItems or {},
+                        matchMode     = src.matchMode or "all",
+                        cooldownType  = src.cooldownType or 0,
+                        cooldownValue = src.cooldownValue or 0,
                         playerDeliveries = src.playerDeliveries or {},
+                        playerCooldowns  = src.playerCooldowns or {},
                         creator       = src.creator or "unknown",
                         createdAt     = src.createdAt or os.time(),
                         triggerCount  = src.triggerCount or 0,
@@ -777,7 +781,11 @@ function EventTrigger.Load()
                     maxPerPlayer  = dp.maxPerPlayer or -1,
                     requiredItems = dp.requiredItems or {},
                     rewardItems   = dp.rewardItems or {},
+                    matchMode     = dp.matchMode or "all",
+                    cooldownType  = dp.cooldownType or 0,
+                    cooldownValue = dp.cooldownValue or 0,
                     playerDeliveries = dp.playerDeliveries or {},
+                    playerCooldowns  = dp.playerCooldowns or {},
                     creator       = dp.creator or "unknown",
                     createdAt     = dp.createdAt or os.time(),
                     triggerCount  = dp.triggerCount or 0,
@@ -1173,29 +1181,180 @@ function EventTrigger.OnFillWorldObjectContextMenu(playerIndex, context, worldOb
 end
 
 -- ============================================================
--- Placement wizard (ISTextBox multi-step input)
+-- EventTriggerTextPrompt — unified text input dialog
+-- Replaces ISTextBox for wizard steps: proper multi-line prompt handling
+-- and a spacious layout so the prompt never overlaps the input/buttons.
+-- ============================================================
+EventTriggerTextPrompt = ISPanel:derive("EventTriggerTextPrompt")
+
+function EventTriggerTextPrompt:new(title, prompt, defaultText, onOk, onCancel)
+    local sw = getCore():getScreenWidth()
+    local sh = getCore():getScreenHeight()
+
+    local lines = {}
+    if prompt then
+        for line in (prompt .. "\n"):gmatch("([^\n]*)\n") do
+            lines[#lines + 1] = line
+        end
+    end
+    if #lines == 0 then lines[1] = "" end
+
+    local titleH = 28
+    local lineH = 20
+    local padX = 24
+    local entryH = 30
+    local btnH = 34
+    local gap = 16
+
+    local w = 560
+    local promptTop = titleH + 18
+    local promptH = #lines * lineH
+    local entryY = promptTop + promptH + 14
+    local btnY = entryY + entryH + 22
+    local h = btnY + btnH + 18
+    if h < 240 then h = 240 end
+
+    local x = (sw - w) / 2
+    local y = (sh - h) / 2
+
+    local o = ISPanel:new(x, y, w, h)
+    setmetatable(o, self)
+    self.__index = self
+    o.borderColor = { r = 0.5, g = 0.5, b = 0.5, a = 1 }
+    o.backgroundColor = { r = 0, g = 0, b = 0, a = 0.92 }
+    o.width = w
+    o.height = h
+    o.title = title
+    o.lines = lines
+    o.defaultText = defaultText or ""
+    o.onOk = onOk
+    o.onCancel = onCancel
+    o.dragging = false
+    return o
+end
+
+function EventTriggerTextPrompt:initialise()
+    ISPanel.initialise(self)
+    self:create()
+end
+
+function EventTriggerTextPrompt:create()
+    self:setAlwaysOnTop(true)
+
+    local titleH = 28
+    local lineH = 20
+    local padX = 24
+    local entryH = 30
+    local btnH = 34
+
+    self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerTextPrompt.onCancel)
+    self.closeBtn:initialise()
+    self:addChild(self.closeBtn)
+
+    local promptTop = titleH + 18
+    local promptH = #self.lines * lineH
+    local entryY = promptTop + promptH + 14
+    local btnY = entryY + entryH + 22
+
+    self.entry = ISTextEntryBox:new(self.defaultText, padX, entryY, self.width - padX * 2, entryH)
+    self.entry:initialise()
+    self.entry:instantiate()
+    self:addChild(self.entry)
+
+    local btnW = 120
+    local okX = (self.width - (btnW * 2 + 20)) / 2
+    local cancelX = okX + btnW + 20
+
+    self.okBtn = ISButton:new(okX, btnY, btnW, btnH, "OK", self, EventTriggerTextPrompt.onOk)
+    self.okBtn:initialise()
+    self:addChild(self.okBtn)
+
+    self.cancelBtn = ISButton:new(cancelX, btnY, btnW, btnH, "Cancel", self, EventTriggerTextPrompt.onCancel)
+    self.cancelBtn:initialise()
+    self:addChild(self.cancelBtn)
+end
+
+function EventTriggerTextPrompt:onOk()
+    local text = self.entry and self.entry:getText() or ""
+    self:close()
+    if self.onOk then self.onOk(text) end
+end
+
+function EventTriggerTextPrompt:onCancel()
+    self:close()
+    if self.onCancel then self.onCancel() end
+end
+
+function EventTriggerTextPrompt:close()
+    self:setVisible(false)
+    self:removeFromUIManager()
+end
+
+function EventTriggerTextPrompt:onMouseDown(x, y)
+    if y >= 0 and y < 28 then
+        self.dragging = true
+        self.dragOfsX = getMouseX() - self.x
+        self.dragOfsY = getMouseY() - self.y
+        self:setCapture(true)
+        return true
+    end
+    return ISPanel.onMouseDown(self, x, y)
+end
+
+function EventTriggerTextPrompt:onMouseMove(x, y)
+    if self.dragging then
+        self:setX(getMouseX() - self.dragOfsX)
+        self:setY(getMouseY() - self.dragOfsY)
+        return true
+    end
+end
+
+function EventTriggerTextPrompt:onMouseUp(x, y)
+    if self.dragging then
+        self.dragging = false
+        self:setCapture(false)
+        return true
+    end
+end
+
+function EventTriggerTextPrompt:prerender()
+    ISPanel.prerender(self)
+    self:drawRectBorder(0, 0, self.width, self.height, 0.9, 0.35, 0.35, 0.35)
+    self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
+    self:drawTextCentre(self.title or "", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+
+    local y = 28 + 18
+    for _, line in ipairs(self.lines) do
+        if line and #line > 0 then
+            self:drawText(line, 24, y, 0.85, 0.85, 0.85, 1, UIFont.Small)
+        end
+        y = y + 20
+    end
+end
+
+-- ============================================================
+-- Placement wizard (multi-step input)
 -- Step 1: Enter delay(seconds), range, max triggers
 -- ============================================================
 function EventTrigger.PromptDelayRange(x, y, z)
     local cfg = EventTrigger.GetConfig()
     EventTrigger._pending = { x = x, y = y, z = z }
     local defaultText = string.format("%d, %.1f, -1", 3, cfg.defaultRange)
-    local modal = ISTextBox:new(0, 0, 400, 200,
-        "Delay(s), Range, MaxTriggers (-1=unlimited)", defaultText, nil,
-        function(target, button)
-            if button.internal == "OK" then
-                local text = button.parent.entry:getText()
-                local p = EventTrigger._pending
-                p.delay, p.range, p.maxTriggers = 3, cfg.defaultRange, -1
-                local parts = luautils.split(text, ",")
-                if #parts >= 1 then p.delay = tonumber(parts[1]) or 3 end
-                if #parts >= 2 then p.range = tonumber(parts[2]) or cfg.defaultRange end
-                if #parts >= 3 then p.maxTriggers = tonumber(parts[3]) or -1 end
-                if p.delay < 0 then p.delay = 0 end
-                if p.range < 0.5 then p.range = 0.5 end
-                if p.maxTriggers == 0 then p.maxTriggers = -1 end
-                EventTrigger.PromptMessage2()
-            end
+    local modal = EventTriggerTextPrompt:new(
+        "New Trigger",
+        "Delay(s), Range, MaxTriggers (-1=unlimited)",
+        defaultText,
+        function(text)
+            local p = EventTrigger._pending
+            p.delay, p.range, p.maxTriggers = 3, cfg.defaultRange, -1
+            local parts = luautils.split(text, ",")
+            if #parts >= 1 then p.delay = tonumber(parts[1]) or 3 end
+            if #parts >= 2 then p.range = tonumber(parts[2]) or cfg.defaultRange end
+            if #parts >= 3 then p.maxTriggers = tonumber(parts[3]) or -1 end
+            if p.delay < 0 then p.delay = 0 end
+            if p.range < 0.5 then p.range = 0.5 end
+            if p.maxTriggers == 0 then p.maxTriggers = -1 end
+            EventTrigger.PromptMessage2()
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1204,14 +1363,14 @@ end
 -- Step 2: Enter trigger message text
 function EventTrigger.PromptMessage2()
     local p = EventTrigger._pending
-    local modal = ISTextBox:new(0, 0, 400, 200,
-        "Trigger Message (OK to continue)", "Trigger activated!", nil,
-        function(target, button)
-            if button.internal == "OK" then
-                p.msg = button.parent.entry:getText()
-                if not p.msg or #p.msg == 0 then p.msg = "Trigger activated!" end
-                EventTrigger.PromptOutput2()
-            end
+    local modal = EventTriggerTextPrompt:new(
+        "Trigger Message",
+        "Trigger Message (OK to continue)",
+        "Trigger activated!",
+        function(text)
+            p.msg = text
+            if not p.msg or #p.msg == 0 then p.msg = "Trigger activated!" end
+            EventTrigger.PromptOutput2()
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1220,17 +1379,17 @@ end
 -- Step 3: Select output mode
 function EventTrigger.PromptOutput2()
     local p = EventTrigger._pending
-    local modal = ISTextBox:new(0, 0, 460, 200,
-        "Output: 1=Named 2=/say 3=/do 4=/low 5=/yell 6=/ooc 7=Above Head", "2", nil,
-        function(target, button)
-            if button.internal == "OK" then
-                p.outputType = tonumber(button.parent.entry:getText()) or 2
-                if p.outputType < 1 or p.outputType > 7 then p.outputType = 2 end
-                if p.outputType == EventTrigger.OutputType.NAMED then
-                    EventTrigger.PromptOutputName2()
-                else
-                    EventTrigger.PlacePending()
-                end
+    local modal = EventTriggerTextPrompt:new(
+        "Output Mode",
+        "Output: 1=Named 2=/say 3=/do 4=/low 5=/yell 6=/ooc 7=Above Head",
+        "2",
+        function(text)
+            p.outputType = tonumber(text) or 2
+            if p.outputType < 1 or p.outputType > 7 then p.outputType = 2 end
+            if p.outputType == EventTrigger.OutputType.NAMED then
+                EventTrigger.PromptOutputName2()
+            else
+                EventTrigger.PlacePending()
             end
         end)
     modal:initialise()
@@ -1241,13 +1400,13 @@ end
 function EventTrigger.PromptOutputName2()
     local p = EventTrigger._pending
     local cfg = EventTrigger.GetConfig()
-    local modal = ISTextBox:new(0, 0, 400, 200,
-        "Display Name for Named mode (OK to place)", cfg.outputName, nil,
-        function(target, button)
-            if button.internal == "OK" then
-                p.outputName = button.parent.entry:getText() or ""
-                EventTrigger.PlacePending()
-            end
+    local modal = EventTriggerTextPrompt:new(
+        "Named Mode",
+        "Display Name for Named mode (OK to place)",
+        cfg.outputName,
+        function(text)
+            p.outputName = text or ""
+            EventTrigger.PlacePending()
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1297,17 +1456,17 @@ function EventTrigger.PromptEditMessage(index)
     EventTrigger._editIndex = index
     local t = EventTrigger.triggers[index]
     if not t then return end
-    local modal = ISTextBox:new(0, 0, 400, 200,
-        "Message (OK to continue)", t.message, nil,
-        function(target, button)
-            if button.internal == "OK" then
-                EventTrigger.SendCommand("editTriggerMessage", {
-                    index = EventTrigger._editIndex,
-                    id = t and t.id,
-                    message = button.parent.entry:getText(),
-                })
-                EventTrigger.PromptEditDelayRange()
-            end
+    local modal = EventTriggerTextPrompt:new(
+        "Edit Message",
+        "Message (OK to continue)",
+        t.message,
+        function(text)
+            EventTrigger.SendCommand("editTriggerMessage", {
+                index = EventTrigger._editIndex,
+                id = t and t.id,
+                message = text,
+            })
+            EventTrigger.PromptEditDelayRange()
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1319,31 +1478,30 @@ function EventTrigger.PromptEditDelayRange()
     local t = EventTrigger.triggers[idx]
     if not t then return end
     local defaultText = string.format("%d, %.1f, %d", t.delay or 3, t.range or 2, t.maxTriggers or -1)
-    local modal = ISTextBox:new(0, 0, 400, 200,
-        "Delay(s), Range, MaxTriggers (-1=unlim, OK to continue)", defaultText, nil,
-        function(target, button)
-            if button.internal == "OK" then
-                local text = button.parent.entry:getText()
-                local parts = luautils.split(text, ",")
-                local delay, range, maxTriggers
-                if #parts >= 1 then delay = tonumber(parts[1]) end
-                if #parts >= 2 then
-                    range = tonumber(parts[2])
-                    if range and range < 0.5 then range = 0.5 end
-                end
-                if #parts >= 3 then
-                    maxTriggers = tonumber(parts[3])
-                    if maxTriggers == 0 then maxTriggers = -1 end
-                end
-                EventTrigger.SendCommand("editTriggerParams", {
-                    index = idx,
-                    id = t and t.id,
-                    delay = delay,
-                    range = range,
-                    maxTriggers = maxTriggers,
-                })
-                EventTrigger.PromptEditOutput()
+    local modal = EventTriggerTextPrompt:new(
+        "Edit Params",
+        "Delay(s), Range, MaxTriggers (-1=unlim, OK to continue)",
+        defaultText,
+        function(text)
+            local parts = luautils.split(text, ",")
+            local delay, range, maxTriggers
+            if #parts >= 1 then delay = tonumber(parts[1]) end
+            if #parts >= 2 then
+                range = tonumber(parts[2])
+                if range and range < 0.5 then range = 0.5 end
             end
+            if #parts >= 3 then
+                maxTriggers = tonumber(parts[3])
+                if maxTriggers == 0 then maxTriggers = -1 end
+            end
+            EventTrigger.SendCommand("editTriggerParams", {
+                index = idx,
+                id = t and t.id,
+                delay = delay,
+                range = range,
+                maxTriggers = maxTriggers,
+            })
+            EventTrigger.PromptEditOutput()
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1355,24 +1513,23 @@ function EventTrigger.PromptEditOutput()
     local t = EventTrigger.triggers[idx]
     if not t then return end
     local ot = t.outputType or EventTrigger.OutputType.HALO
-    local modal = ISTextBox:new(0, 0, 460, 200,
+    local modal = EventTriggerTextPrompt:new(
+        "Edit Output",
         "Output: 1=Named 2=/say 3=/do 4=/low 5=/yell 6=/ooc 7=Above Head (current: " .. OutputTypeToName(ot) .. ")",
-        tostring(ot), nil,
-        function(target, button)
-            if button.internal == "OK" then
-                local val = tonumber(button.parent.entry:getText())
-                if val and val >= 1 and val <= 7 then
-                    EventTrigger.SendCommand("editTriggerOutput", {
-                        index = idx,
-                        id = t and t.id,
-                        outputType = val,
-                    })
-                end
-                if val == EventTrigger.OutputType.NAMED then
-                    EventTrigger.PromptEditOutputName()
-                else
-                    if EventTrigger._ui then EventTrigger._ui:refreshList() end
-                end
+        tostring(ot),
+        function(text)
+            local val = tonumber(text)
+            if val and val >= 1 and val <= 7 then
+                EventTrigger.SendCommand("editTriggerOutput", {
+                    index = idx,
+                    id = t and t.id,
+                    outputType = val,
+                })
+            end
+            if val == EventTrigger.OutputType.NAMED then
+                EventTrigger.PromptEditOutputName()
+            else
+                if EventTrigger._ui then EventTrigger._ui:refreshList() end
             end
         end)
     modal:initialise()
@@ -1387,18 +1544,17 @@ function EventTrigger.PromptEditOutputName()
     local cfg = EventTrigger.GetConfig()
     local current = t.outputName
     if not current or #current == 0 then current = cfg.outputName end
-    local modal = ISTextBox:new(0, 0, 380, 200,
-        "Display Name for Named mode", current, nil,
-        function(target, button)
-            if button.internal == "OK" then
-                local name = button.parent.entry:getText()
-                EventTrigger.SendCommand("editTriggerOutput", {
-                    index = idx,
-                    id = t and t.id,
-                    outputName = (name and #name > 0) and name or "",
-                })
-                if EventTrigger._ui then EventTrigger._ui:refreshList() end
-            end
+    local modal = EventTriggerTextPrompt:new(
+        "Named Mode",
+        "Display Name for Named mode",
+        current,
+        function(text)
+            EventTrigger.SendCommand("editTriggerOutput", {
+                index = idx,
+                id = t and t.id,
+                outputName = (text and #text > 0) and text or "",
+            })
+            if EventTrigger._ui then EventTrigger._ui:refreshList() end
         end)
     modal:initialise()
     modal:addToUIManager()

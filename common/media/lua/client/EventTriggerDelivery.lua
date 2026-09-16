@@ -1030,16 +1030,16 @@ end
 function EventTrigger.Delivery.PromptHintText()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
-    local modal = ISTextBox:new(0, 0, 420, 200,
-        "Delivery hint text (shown above player head)", "Delivery Point", nil,
-        function(target, button)
-            if button.internal == "OK" then
-                local text = button.parent.entry:getText()
-                p.hintText = (text and #text > 0) and text or "Delivery Point"
-                EventTrigger.Delivery.PromptRadius()
-            else
-                EventTrigger.Delivery._setupPending = nil
-            end
+    local modal = EventTriggerTextPrompt:new(
+        "Delivery Point",
+        "Delivery hint text (shown above player head)",
+        "Delivery Point",
+        function(text)
+            p.hintText = (text and #text > 0) and text or "Delivery Point"
+            EventTrigger.Delivery.PromptRadius()
+        end,
+        function()
+            EventTrigger.Delivery._setupPending = nil
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1049,17 +1049,18 @@ function EventTrigger.Delivery.PromptRadius()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local defaultText = "3.0"
-    local modal = ISTextBox:new(0, 0, 400, 200,
-        "Trigger radius (tiles, must be > 0)", defaultText, nil,
-        function(target, button)
-            if button.internal == "OK" then
-                local radius = tonumber(button.parent.entry:getText()) or 3.0
-                if radius <= 0 then radius = 3.0 end
-                p.radius = radius
-                EventTrigger.Delivery.PromptDeliveryLimits()
-            else
-                EventTrigger.Delivery._setupPending = nil
-            end
+    local modal = EventTriggerTextPrompt:new(
+        "Trigger Radius",
+        "Trigger radius (tiles, must be > 0)",
+        defaultText,
+        function(text)
+            local radius = tonumber(text) or 3.0
+            if radius <= 0 then radius = 3.0 end
+            p.radius = radius
+            EventTrigger.Delivery.PromptDeliveryLimits()
+        end,
+        function()
+            EventTrigger.Delivery._setupPending = nil
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1074,24 +1075,23 @@ function EventTrigger.Delivery.PromptDeliveryLimits()
     else
         defaultText = "-1, -1"
     end
-    local modal = ISTextBox:new(0, 0, 420, 240,
+    local modal = EventTriggerTextPrompt:new(
+        "Delivery Limits",
         "Max Players, Max Per Player (-1=unlimited)\nFormat: N, M\nExample: 5, 1 = first 5 players, once each",
-        defaultText, nil,
-        function(target, button)
-            if button.internal == "OK" then
-                local text = button.parent.entry:getText()
-                local parts = luautils.split(text, ",")
-                local maxPlayers = tonumber(parts[1]) or -1
-                local maxPerPlayer = tonumber(parts[2])
-                if not maxPerPlayer then maxPerPlayer = -1 end
-                if maxPlayers < -1 then maxPlayers = -1 end
-                if maxPerPlayer < -1 then maxPerPlayer = -1 end
-                p.maxPlayers = maxPlayers
-                p.maxPerPlayer = maxPerPlayer
-                EventTrigger.Delivery.PromptMatchMode()
-            else
-                EventTrigger.Delivery._setupPending = nil
-            end
+        defaultText,
+        function(text)
+            local parts = luautils.split(text, ",")
+            local maxPlayers = tonumber(parts[1]) or -1
+            local maxPerPlayer = tonumber(parts[2])
+            if not maxPerPlayer then maxPerPlayer = -1 end
+            if maxPlayers < -1 then maxPlayers = -1 end
+            if maxPerPlayer < -1 then maxPerPlayer = -1 end
+            p.maxPlayers = maxPlayers
+            p.maxPerPlayer = maxPerPlayer
+            EventTrigger.Delivery.PromptMatchMode()
+        end,
+        function()
+            EventTrigger.Delivery._setupPending = nil
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1102,18 +1102,18 @@ function EventTrigger.Delivery.PromptMatchMode()
     if not p then return end
     local defaultMode = p.matchMode or "all"
     if not p._editing then defaultMode = "all" end
-    local modal = ISTextBox:new(0, 0, 420, 240,
+    local modal = EventTriggerTextPrompt:new(
+        "Match Mode",
         "Match Mode:\n- all = require ALL items (AND logic)\n- any = require ANY one item (OR logic)\n\nEnter 'all' or 'any'",
-        defaultMode, nil,
-        function(target, button)
-            if button.internal == "OK" then
-                local mode = string.lower(string.trim(button.parent.entry:getText() or ""))
-                if mode ~= "all" and mode ~= "any" then mode = "all" end
-                p.matchMode = mode
-                EventTrigger.Delivery.PromptCooldown()
-            else
-                EventTrigger.Delivery._setupPending = nil
-            end
+        defaultMode,
+        function(text)
+            local mode = string.lower(string.trim(text or ""))
+            if mode ~= "all" and mode ~= "any" then mode = "all" end
+            p.matchMode = mode
+            EventTrigger.Delivery.PromptCooldown()
+        end,
+        function()
+            EventTrigger.Delivery._setupPending = nil
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1125,23 +1125,22 @@ function EventTrigger.Delivery.PromptCooldown()
     local defaultType = p.cooldownType or 0
     local defaultValue = p.cooldownValue or 0
     if not p._editing then defaultType = 0; defaultValue = 0 end
-    local modal = ISTextBox:new(0, 0, 420, 280,
+    local modal = EventTriggerTextPrompt:new(
+        "Cooldown",
         "Cooldown Settings:\nType: 0=none, 1=game time (minutes), 2=real time (minutes)\nValue: cooldown minutes (0 = no cooldown)\n\nFormat: Type, Value\nExample: 1, 30 = 30 minutes game time cooldown",
-        string.format("%d, %d", defaultType, defaultValue), nil,
-        function(target, button)
-            if button.internal == "OK" then
-                local text = button.parent.entry:getText()
-                local parts = luautils.split(text, ",")
-                local cooldownType = tonumber(parts[1]) or 0
-                local cooldownValue = tonumber(parts[2]) or 0
-                if cooldownType < 0 or cooldownType > 2 then cooldownType = 0 end
-                if cooldownValue < 0 then cooldownValue = 0 end
-                p.cooldownType = cooldownType
-                p.cooldownValue = cooldownValue
-                EventTrigger.Delivery.PromptRequiredItems()
-            else
-                EventTrigger.Delivery._setupPending = nil
-            end
+        string.format("%d, %d", defaultType, defaultValue),
+        function(text)
+            local parts = luautils.split(text, ",")
+            local cooldownType = tonumber(parts[1]) or 0
+            local cooldownValue = tonumber(parts[2]) or 0
+            if cooldownType < 0 or cooldownType > 2 then cooldownType = 0 end
+            if cooldownValue < 0 then cooldownValue = 0 end
+            p.cooldownType = cooldownType
+            p.cooldownValue = cooldownValue
+            EventTrigger.Delivery.PromptRequiredItems()
+        end,
+        function()
+            EventTrigger.Delivery._setupPending = nil
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1208,7 +1207,7 @@ function EventTriggerDeliveryItemSelect:create()
     self.midX = math.floor(self.width / 2)
     self.leftW = self.midX - 20
     self.rightW = self.width - self.midX - 14
-    self.rowH = 36
+    self.rowH = 46
     self.rowsPerPage = 8
 
     self.leftPage = 0
@@ -1481,11 +1480,13 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
             self:addChild(collectLbl)
             table.insert(self.selectedChildren, collectLbl)
 
-            local collectCB = ISTickBox:new(cbX, cbY, 18, 18, "", self, EventTriggerDeliveryItemSelect.onToggleCollect)
+            local itemIdx = i + 1
+            local collectCB = ISTickBox:new(cbX, cbY, 18, 18, "", self, function()
+                EventTriggerDeliveryItemSelect.onToggleCollect(self, itemIdx)
+            end)
             collectCB:initialise()
             collectCB:addOption("")
             collectCB.selected[1] = collect
-            collectCB.itemIndex = i + 1
             self:addChild(collectCB)
             table.insert(self.selectedChildren, collectCB)
         end
@@ -1597,16 +1598,15 @@ function EventTriggerDeliveryItemSelect:onDelItem(btn)
 end
 
 -- Toggle collect checkbox for required items
-function EventTriggerDeliveryItemSelect:onToggleCollect(tickbox)
+function EventTriggerDeliveryItemSelect:onToggleCollect(idx)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local mode = EventTrigger.Delivery._selectionMode or "required"
     if mode ~= "required" then return end
 
     local itemList = p.requiredItems
-    local idx = tickbox.itemIndex
-    if idx >= 1 and idx <= #itemList then
-        itemList[idx].collect = tickbox.selected[1] == true
+    if idx and idx >= 1 and idx <= #itemList then
+        itemList[idx].collect = not (itemList[idx].collect ~= false)
         self:refreshUI()
     end
 end
@@ -1668,7 +1668,7 @@ end
 function EventTriggerDeliveryItemSelect:new(mode)
     local sw = getCore():getScreenWidth()
     local sh = getCore():getScreenHeight()
-    local w, h = 710, 500
+    local w, h = 840, 620
     local x, y = (sw - w) / 2, (sh - h) / 2
 
     local o = ISPanel:new(x, y, w, h)
@@ -1696,16 +1696,16 @@ function EventTrigger.Delivery.PromptItemQuantity(idx, mode, parentUI)
     local defaultText = tostring(item.count or 1)
     local hintText = "Enter quantity (" .. (item.displayName or "?") .. ")\nPositive integer, minimum 1"
 
-    local modal = ISTextBox:new(0, 0, 350, 200,
-        hintText, defaultText, nil,
-        function(target, button)
-            if button.internal == "OK" then
-                local count = tonumber(button.parent.entry:getText()) or 1
-                if count < 1 then count = 1 end
-                item.count = count
-                if parentUI and parentUI.refreshUI then
-                    parentUI:refreshUI()
-                end
+    local modal = EventTriggerTextPrompt:new(
+        "Item Quantity",
+        hintText,
+        defaultText,
+        function(text)
+            local count = tonumber(text) or 1
+            if count < 1 then count = 1 end
+            item.count = count
+            if parentUI and parentUI.refreshUI then
+                parentUI:refreshUI()
             end
         end)
     modal:initialise()
@@ -1933,6 +1933,7 @@ function EventTrigger.Delivery._cloneItems(items)
             fullType = item.fullType,
             displayName = item.displayName,
             count = item.count,
+            collect = item.collect ~= false,
         }
     end
     return out
