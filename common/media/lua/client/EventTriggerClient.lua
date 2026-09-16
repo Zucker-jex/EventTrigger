@@ -97,6 +97,25 @@ function EventTrigger.fitText(text, font, maxWidth)
     return out .. ellipsis
 end
 
+-- Global UI scale factor: enlarges all windows and spacing (~1.75x) to reduce crowding.
+EventTrigger.US = 1.5
+
+-- Clamp a window dimension to the visible screen (leave a small margin).
+function EventTrigger.fitW(baseW)
+    local sw = getCore():getScreenWidth()
+    return math.min(math.floor(baseW * EventTrigger.US), math.floor(sw * 0.94))
+end
+
+function EventTrigger.fitH(baseH)
+    local sh = getCore():getScreenHeight()
+    return math.min(math.floor(baseH * EventTrigger.US), math.floor(sh * 0.94))
+end
+
+-- Measure the true width PZ will give a button (ISButton auto-expands to fit title).
+function EventTrigger.btnW(title)
+    return getTextManager():MeasureStringX(UIFont.Small, title) + 10
+end
+
 -- Trigger message output mode enum (corresponds to MongooseChat channels)
 EventTrigger.OutputType = {
     NAMED = 1,  -- Named + system channel (blue)
@@ -1208,7 +1227,7 @@ end
 -- ============================================================
 EventTriggerTextPrompt = ISPanel:derive("EventTriggerTextPrompt")
 
-function EventTriggerTextPrompt:new(title, prompt, defaultText, onOk, onCancel)
+function EventTriggerTextPrompt:new(title, prompt, defaultText, onOk, onCancel, onBack)
     local sw = getCore():getScreenWidth()
     local sh = getCore():getScreenHeight()
 
@@ -1220,19 +1239,19 @@ function EventTriggerTextPrompt:new(title, prompt, defaultText, onOk, onCancel)
     end
     if #lines == 0 then lines[1] = "" end
 
+    local s = EventTrigger.US
     local titleH = 28
-    local lineH = 20
-    local padX = 24
-    local entryH = 30
-    local btnH = 34
-    local gap = 16
+    local lineH = math.floor(20 * s)
+    local padX = math.floor(24 * s)
+    local entryH = math.floor(30 * s)
+    local btnH = math.floor(34 * s)
 
-    local w = 560
-    local promptTop = titleH + 18
+    local w = EventTrigger.fitW(560)
+    local promptTop = titleH + math.floor(18 * s)
     local promptH = #lines * lineH
-    local entryY = promptTop + promptH + 14
-    local btnY = entryY + entryH + 22
-    local h = btnY + btnH + 18
+    local entryY = promptTop + promptH + math.floor(14 * s)
+    local btnY = entryY + entryH + math.floor(22 * s)
+    local h = btnY + btnH + math.floor(18 * s)
     if h < 240 then h = 240 end
 
     local x = (sw - w) / 2
@@ -1247,9 +1266,18 @@ function EventTriggerTextPrompt:new(title, prompt, defaultText, onOk, onCancel)
     o.height = h
     o.title = title
     o.lines = lines
+    o.s = s
+    o.lineH = lineH
+    o.padX = padX
+    o.entryH = entryH
+    o.btnH = btnH
+    o.promptTop = promptTop
+    o.entryY = entryY
+    o.btnY = btnY
     o.defaultText = defaultText or ""
-    o.onOk = onOk
-    o.onCancel = onCancel
+    o.onOkCallback = onOk
+    o.onCancelCallback = onCancel
+    o.onBackCallback = onBack
     o.dragging = false
     return o
 end
@@ -1262,48 +1290,66 @@ end
 function EventTriggerTextPrompt:create()
     self:setAlwaysOnTop(true)
 
-    local titleH = 28
-    local lineH = 20
-    local padX = 24
-    local entryH = 30
-    local btnH = 34
+    local padX = self.padX
+    local entryH = self.entryH
+    local btnH = self.btnH
 
     self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerTextPrompt.onCancel)
     self.closeBtn:initialise()
     self:addChild(self.closeBtn)
 
-    local promptTop = titleH + 18
-    local promptH = #self.lines * lineH
-    local entryY = promptTop + promptH + 14
-    local btnY = entryY + entryH + 22
-
-    self.entry = ISTextEntryBox:new(self.defaultText, padX, entryY, self.width - padX * 2, entryH)
+    self.entry = ISTextEntryBox:new(self.defaultText, padX, self.entryY, self.width - padX * 2, entryH)
     self.entry:initialise()
     self.entry:instantiate()
     self:addChild(self.entry)
 
-    local btnW = 120
-    local okX = (self.width - (btnW * 2 + 20)) / 2
-    local cancelX = okX + btnW + 20
+    local okW = EventTrigger.btnW("OK")
+    local cancelW = EventTrigger.btnW("Cancel")
 
-    self.okBtn = ISButton:new(okX, btnY, btnW, btnH, "OK", self, EventTriggerTextPrompt.onOk)
-    self.okBtn:initialise()
-    self:addChild(self.okBtn)
+    if self.onBackCallback then
+        local backW = EventTrigger.btnW("Back")
+        local total = backW + gap + okW + gap + cancelW
+        local startX = (self.width - total) / 2
 
-    self.cancelBtn = ISButton:new(cancelX, btnY, btnW, btnH, "Cancel", self, EventTriggerTextPrompt.onCancel)
-    self.cancelBtn:initialise()
-    self:addChild(self.cancelBtn)
+        self.backBtn = ISButton:new(startX, self.btnY, backW, btnH, "Back", self, EventTriggerTextPrompt.onBack)
+        self.backBtn:initialise()
+        self:addChild(self.backBtn)
+
+        local okX = startX + backW + gap
+        self.okBtn = ISButton:new(okX, self.btnY, okW, btnH, "OK", self, EventTriggerTextPrompt.onOk)
+        self.okBtn:initialise()
+        self:addChild(self.okBtn)
+
+        self.cancelBtn = ISButton:new(okX + okW + gap, self.btnY, cancelW, btnH, "Cancel", self, EventTriggerTextPrompt.onCancel)
+        self.cancelBtn:initialise()
+        self:addChild(self.cancelBtn)
+    else
+        local okX = (self.width - (okW + gap + cancelW)) / 2
+        self.okBtn = ISButton:new(okX, self.btnY, okW, btnH, "OK", self, EventTriggerTextPrompt.onOk)
+        self.okBtn:initialise()
+        self:addChild(self.okBtn)
+
+        self.cancelBtn = ISButton:new(okX + okW + gap, self.btnY, cancelW, btnH, "Cancel", self, EventTriggerTextPrompt.onCancel)
+        self.cancelBtn:initialise()
+        self:addChild(self.cancelBtn)
+    end
 end
 
 function EventTriggerTextPrompt:onOk()
     local text = self.entry and self.entry:getText() or ""
     self:close()
-    if self.onOk then self.onOk(text) end
+    if self.onOkCallback then self.onOkCallback(text) end
 end
 
 function EventTriggerTextPrompt:onCancel()
     self:close()
-    if self.onCancel then self.onCancel() end
+    if self.onCancelCallback then self.onCancelCallback() end
+end
+
+function EventTriggerTextPrompt:onBack()
+    self:close()
+    if self.onBackCallback then self.onBack
+    if self.onCancelCallback then self.onCancelCallback() end
 end
 
 function EventTriggerTextPrompt:close()
@@ -1344,12 +1390,12 @@ function EventTriggerTextPrompt:prerender()
     self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
     self:drawTextCentre(self.title or "", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
 
-    local y = 28 + 18
+    local y = self.promptTop
     for _, line in ipairs(self.lines) do
         if line and #line > 0 then
-            self:drawText(line, 24, y, 0.85, 0.85, 0.85, 1, UIFont.Small)
+            self:drawText(line, self.padX, y, 0.85, 0.85, 0.85, 1, UIFont.Small)
         end
-        y = y + 20
+        y = y + self.lineH
     end
 end
 
@@ -1359,8 +1405,23 @@ end
 -- ============================================================
 function EventTrigger.PromptDelayRange(x, y, z)
     local cfg = EventTrigger.GetConfig()
+    local prev = EventTrigger._pending
     EventTrigger._pending = { x = x, y = y, z = z }
-    local defaultText = string.format("%d, %.1f, -1", 3, cfg.defaultRange)
+    -- Preserve previously entered values when navigating "Back" to this step.
+    if prev then
+        EventTrigger._pending.delay = prev.delay
+        EventTrigger._pending.range = prev.range
+        EventTrigger._pending.maxTriggers = prev.maxTriggers
+        EventTrigger._pending.msg = prev.msg
+        EventTrigger._pending.outputType = prev.outputType
+        EventTrigger._pending.outputName = prev.outputName
+    end
+    local defaultText
+    if EventTrigger._pending.delay then
+        defaultText = string.format("%d, %.1f, %d", EventTrigger._pending.delay, EventTrigger._pending.range or cfg.defaultRange, EventTrigger._pending.maxTriggers or -1)
+    else
+        defaultText = string.format("%d, %.1f, -1", 3, cfg.defaultRange)
+    end
     local modal = EventTriggerTextPrompt:new(
         "New Trigger",
         "Delay(s), Range, MaxTriggers (-1=unlimited)",
@@ -1384,14 +1445,19 @@ end
 -- Step 2: Enter trigger message text
 function EventTrigger.PromptMessage2()
     local p = EventTrigger._pending
+    local defaultText = (p.msg and #p.msg > 0) and p.msg or "Trigger activated!"
     local modal = EventTriggerTextPrompt:new(
         "Trigger Message",
         "Trigger Message (OK to continue)",
-        "Trigger activated!",
+        defaultText,
         function(text)
             p.msg = text
             if not p.msg or #p.msg == 0 then p.msg = "Trigger activated!" end
             EventTrigger.PromptOutput2()
+        end,
+        nil,
+        function()
+            EventTrigger.PromptDelayRange(p.x, p.y, p.z)
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1400,10 +1466,11 @@ end
 -- Step 3: Select output mode
 function EventTrigger.PromptOutput2()
     local p = EventTrigger._pending
+    local defaultText = tostring(p.outputType or 2)
     local modal = EventTriggerTextPrompt:new(
         "Output Mode",
         "Output: 1=Named 2=/say 3=/do 4=/low 5=/yell 6=/ooc 7=Above Head",
-        "2",
+        defaultText,
         function(text)
             p.outputType = tonumber(text) or 2
             if p.outputType < 1 or p.outputType > 7 then p.outputType = 2 end
@@ -1412,6 +1479,10 @@ function EventTrigger.PromptOutput2()
             else
                 EventTrigger.PlacePending()
             end
+        end,
+        nil,
+        function()
+            EventTrigger.PromptMessage2()
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1421,13 +1492,19 @@ end
 function EventTrigger.PromptOutputName2()
     local p = EventTrigger._pending
     local cfg = EventTrigger.GetConfig()
+    local current = p.outputName
+    if not current or #current == 0 then current = cfg.outputName end
     local modal = EventTriggerTextPrompt:new(
         "Named Mode",
         "Display Name for Named mode (OK to place)",
-        cfg.outputName,
+        current,
         function(text)
             p.outputName = text or ""
             EventTrigger.PlacePending()
+        end,
+        nil,
+        function()
+            EventTrigger.PromptOutput2()
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1523,6 +1600,10 @@ function EventTrigger.PromptEditDelayRange()
                 maxTriggers = maxTriggers,
             })
             EventTrigger.PromptEditOutput()
+        end,
+        nil,
+        function()
+            EventTrigger.PromptEditMessage(EventTrigger._editIndex)
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1552,6 +1633,10 @@ function EventTrigger.PromptEditOutput()
             else
                 if EventTrigger._ui then EventTrigger._ui:refreshList() end
             end
+        end,
+        nil,
+        function()
+            EventTrigger.PromptEditDelayRange()
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1576,6 +1661,10 @@ function EventTrigger.PromptEditOutputName()
                 outputName = (text and #text > 0) and text or "",
             })
             if EventTrigger._ui then EventTrigger._ui:refreshList() end
+        end,
+        nil,
+        function()
+            EventTrigger.PromptEditOutput()
         end)
     modal:initialise()
     modal:addToUIManager()
@@ -1652,25 +1741,9 @@ function EventTriggerUI:initialise()
 end
 
 function EventTriggerUI:create()
-    local layout = LoadLayout()
-    local win = layout.window or { x = 0, y = 0, w = 960, h = 520 }
-    local header = layout.header or { y = 32, height = 18 }
-    local listArea = layout.list or { x = 8, y = 52, w = 944, h = 396 }
-    local footer = layout.footer or { y = 485, height = 24 }
-    local rowDef = layout.row or { height = 28, buttonH = 20 }
-
+    local s = EventTrigger.US
     self:setAlwaysOnTop(true)
 
-    self.layout = layout
-    self.headerY = header.y
-    self.listX = listArea.x
-    self.listY = listArea.y
-    self.listW = listArea.w
-    self.listH = listArea.h
-    self.rowH = rowDef.height
-    self.pageNum = 0
-
-    -- SP: view all by default; MP: admin sees all, regular players see only own
     if not EventTrigger.IsMultiplayer() then
         self.viewAll = true
     else
@@ -1680,77 +1753,74 @@ function EventTriggerUI:create()
     self.rows = {}
     self.rowData = {}
     self.rowCount = 0
-    -- Alternating row background colors (improves readability)
     self.altColors = { {0.15,0.15,0.15}, {0.11,0.11,0.11} }
+    self.pageNum = 0
+
+    -- Adaptive layout (all dimensions scale with self.width/height + US)
+    local titleH = 28
+    self.headerY = titleH + 6
+    self.listX = math.floor(10 * s)
+    self.listY = self.headerY + math.floor(18 * s) + 6
+    self.listW = self.width - self.listX * 2
+    self.rowH = math.floor(30 * s)
+    local btnH = math.floor(30 * s)
+    self.footerY = self.height - btnH - 10
+    self.listH = self.footerY - self.listY - 10
+    self.cols = self:computeCols()
 
     -- Close button
-    self.closeBtn = ISButton:new(
-        (layout.close and layout.close.x) or 935,
-        (layout.close and layout.close.y) or 4,
-        (layout.close and layout.close.w) or 21,
-        (layout.close and layout.close.h) or 21,
-        (layout.close and layout.close.text) or "X",
-        self, EventTriggerUI.onClose)
+    self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerUI.onClose)
     self.closeBtn:initialise()
     self:addChild(self.closeBtn)
 
     self:refreshList()
 
-    -- Footer buttons
-    local addDef = layout.add or { x = 246, w = 120, h = 24 }
-    self.addBtn = ISButton:new(
-        addDef.x, footer.y, addDef.w, addDef.h,
-        addDef.text or "Add Trigger", self, EventTriggerUI.onAdd)
-    self.addBtn:initialise()
-    self:addChild(self.addBtn)
+    -- Footer buttons — flow layout using each button's TRUE (auto-expanded) width
+    local gap = math.floor(10 * s)
+    local fx = self.listX
+    local function placeBtn(title, onclick)
+        local btn = ISButton:new(fx, self.footerY, EventTrigger.btnW(title), btnH, title, self, onclick)
+        btn:initialise()
+        self:addChild(btn)
+        fx = fx + btn.width + gap
+        return btn
+    end
 
-    -- "Set Delivery Point" button — disabled when delivery module failed to load.
-    local dlvDef = layout.addDelivery or { x = 140, w = 100, h = 24 }
-    self.addDeliveryBtn = ISButton:new(
-        dlvDef.x, footer.y, dlvDef.w, dlvDef.h,
-        dlvDef.text or "Set Delivery Pt", self, EventTriggerUI.onAddDelivery)
-    self.addDeliveryBtn:initialise()
+    self.addDeliveryBtn = placeBtn("Set Delivery Pt", EventTriggerUI.onAddDelivery)
     if not EventTrigger.DeliveryLoaded then
         self.addDeliveryBtn:setEnable(false)
         self.addDeliveryBtn:setTitle("Delivery (unavailable)")
     end
-    self:addChild(self.addDeliveryBtn)
-
-    local delDef = layout.deleteAll or { x = 374, w = 130, h = 24 }
-    self.delAllBtn = ISButton:new(
-        delDef.x, footer.y, delDef.w, delDef.h,
-        delDef.text or "Delete All", self, EventTriggerUI.onDeleteAll)
-    self.delAllBtn:initialise()
-    self:addChild(self.delAllBtn)
-
-    local refDef = layout.refresh or { x = 512, w = 80, h = 24 }
-    self.refreshBtn = ISButton:new(
-        refDef.x, footer.y, refDef.w, refDef.h,
-        refDef.text or "Refresh", self, EventTriggerUI.onRefresh)
-    self.refreshBtn:initialise()
-    self:addChild(self.refreshBtn)
-
-    -- "Show All" button, visible in MP for admins, toggles view all/own triggers
-    local showDef = layout.showAll or { x = 644, w = 100, h = 24 }
-    self.showAllBtn = ISButton:new(
-        showDef.x, footer.y, showDef.w, showDef.h,
-        "Show All", self, EventTriggerUI.onToggleView)
-    self.showAllBtn:initialise()
-    -- Hidden in SP, admin-only in MP
+    self.addBtn = placeBtn("Add Trigger", EventTriggerUI.onAdd)
+    self.delAllBtn = placeBtn("Delete All", EventTriggerUI.onDeleteAll)
+    self.refreshBtn = placeBtn("Refresh", EventTriggerUI.onRefresh)
+    self.showAllBtn = placeBtn("Show All", EventTriggerUI.onToggleView)
     self.showAllBtn:setVisible(EventTrigger.IsMultiplayer() and EventTrigger.IsAdmin())
-    self:addChild(self.showAllBtn)
 
     -- Pagination buttons (right-aligned in footer, clear of action buttons)
-    local pgX = self:getWidth() - 62
-    self.prevPageBtn = ISButton:new(pgX, footer.y, 24, 28, "<", self, EventTriggerUI.onPrevPage)
+    local pgX = self.width - 10 - 24 - 4 - 24
+    self.prevPageBtn = ISButton:new(pgX, self.footerY, 24, btnH, "<", self, EventTriggerUI.onPrevPage)
     self.prevPageBtn:initialise()
     self:addChild(self.prevPageBtn)
 
-    self.nextPageBtn = ISButton:new(pgX + 28, footer.y, 24, 28, ">", self, EventTriggerUI.onNextPage)
+    self.nextPageBtn = ISButton:new(pgX + 28, self.footerY, 24, btnH, ">", self, EventTriggerUI.onNextPage)
     self.nextPageBtn:initialise()
     self:addChild(self.nextPageBtn)
 
     self:updatePageButtons()
+end
+
+-- Column layout: proportional widths so headers/rows always align at any window size.
+function EventTriggerUI:computeCols()
+    local ratios = { 0.04, 0.15, 0.24, 0.20, 0.10, 0.08, 0.19 }
+    local cols = {}
+    local x = self.listX
+    for i, r in ipairs(ratios) do
+        local w = math.floor(self.listW * r)
+        cols[i] = { x = x, w = w }
+        x = x + w
+    end
+    return cols
 end
 
 -- Get filtered triggers by creator
@@ -1862,21 +1932,18 @@ function EventTriggerUI:addRow(entry)
     local t = entry.trigger
     local index = entry.index
     local isDlv = entry._isDelivery
-    local layout = self.layout
-    local rowDef = layout.row or { height = 28, buttonH = 20 }
-    local rowBtns = layout.rowBtns or {}
-    local headerCols = layout.headerCols or {}
+    local cols = self.cols or self:computeCols()
     local rowIdx = self.rowCount
     self.rowCount = self.rowCount + 1
-    local y = self.listY + rowIdx * rowDef.height
+    local y = self.listY + rowIdx * self.rowH
 
-    local colIndex = headerCols[1] or { x = 8, w = 24 }
-    local colPos   = headerCols[2] or { x = 36, w = 110 }
-    local colMsg   = headerCols[3] or { x = 150, w = 210 }
-    local colDet   = headerCols[4] or { x = 364, w = 160 }
-    local colCreat = headerCols[5] or { x = 528, w = 100 }
-    local colTrig  = headerCols[6] or { x = 632, w = 90 }
-    local colActs  = headerCols[7] or { x = 726, w = 138 }
+    local colIndex = cols[1]
+    local colPos   = cols[2]
+    local colMsg   = cols[3]
+    local colDet   = cols[4]
+    local colCreat = cols[5]
+    local colTrig  = cols[6]
+    local colActs  = cols[7]
 
     -- Row background color: delivery points get a distinct tint
     local bgColor = isDlv and {0.08, 0.06, 0.12} or {0.08, 0.08, 0.08}
@@ -1885,7 +1952,6 @@ function EventTriggerUI:addRow(entry)
         -- Delivery point row
         local count = t.triggerCount or 0
         local completed = count > 0
-        local exhausted = completed  -- delivery is one-time if completed
         local reqCount = t.requiredItems and #t.requiredItems or 0
         local rewCount = t.rewardItems and #t.rewardItems or 0
 
@@ -1941,51 +2007,33 @@ function EventTriggerUI:addRow(entry)
         }
     end
 
+    -- Action buttons — flow layout using each button's TRUE (auto-expanded) width
+    local s = EventTrigger.US
+    local btnH = math.floor(22 * s)
+    local gap = math.floor(6 * s)
     local bx = colActs.x + 2
+    local by = y + (self.rowH - btnH) / 2
 
-    local editDef = rowBtns.edit or { w = 36 }
-    local editBtn = ISButton:new(bx, y + 4, editDef.w, rowDef.buttonH,
-        editDef.text or "Edit", self, EventTriggerUI.onEditRow)
-    editBtn:initialise()
-    editBtn.idx = index
-    editBtn.entry = entry
-    self:addChild(editBtn)
-    table.insert(self.rows, editBtn)
-    bx = bx + editDef.w + 2
+    local function addActionBtn(title, handler)
+        local btn = ISButton:new(bx, by, EventTrigger.btnW(title), btnH, title, self, handler)
+        btn:initialise()
+        btn.idx = index
+        btn.entry = entry
+        self:addChild(btn)
+        table.insert(self.rows, btn)
+        bx = bx + btn.width + gap
+        return btn
+    end
 
-    local delDef = rowBtns.delete or { w = 22 }
-    local delBtn = ISButton:new(bx, y + 4, delDef.w, rowDef.buttonH,
-        delDef.text or "X", self, EventTriggerUI.onDeleteRow)
-    delBtn:initialise()
-    delBtn.idx = index
-    delBtn.entry = entry
-    self:addChild(delBtn)
-    table.insert(self.rows, delBtn)
-    bx = bx + delDef.w + 2
-
-    local rstDef = rowBtns.reset or { w = 22 }
-    local rstBtn = ISButton:new(bx, y + 4, rstDef.w, rowDef.buttonH,
-        rstDef.text or "R", self, EventTriggerUI.onResetRow)
-    rstBtn:initialise()
-    rstBtn.idx = index
-    rstBtn.entry = entry
-    self:addChild(rstBtn)
-    table.insert(self.rows, rstBtn)
-    bx = bx + rstDef.w + 2
-
-    local histDef = rowBtns.history or { w = 46 }
-    local histBtn = ISButton:new(bx, y + 4, histDef.w, rowDef.buttonH,
-        histDef.text or "Hist", self, EventTriggerUI.onHistoryRow)
-    histBtn:initialise()
-    histBtn.idx = index
-    histBtn.entry = entry
-    self:addChild(histBtn)
-    table.insert(self.rows, histBtn)
+    addActionBtn("Edit", EventTriggerUI.onEditRow)
+    addActionBtn("X", EventTriggerUI.onDeleteRow)
+    addActionBtn("R", EventTriggerUI.onResetRow)
+    addActionBtn("Hist", EventTriggerUI.onHistoryRow)
 end
 
 -- Title bar drag: start drag when clicking title area
 function EventTriggerUI:onMouseDown(x, y)
-    local titleH = (self.layout.titleBar and self.layout.titleBar.height) or 28
+    local titleH = 28
     if y >= 0 and y < titleH then
         self.dragging = true
         self.dragOfsX = getMouseX() - self.x
@@ -2138,24 +2186,21 @@ end
 function EventTriggerUI:prerender()
     ISPanel.prerender(self)
 
-    local layout = self.layout
-    local win = layout.window or { w = 960, h = 520 }
-    local header = layout.header or { y = 32, height = 18 }
-    local headerCols = layout.headerCols or {}
-    local listArea = layout.list or { x = 8, y = 52, w = 944, h = 396 }
-    local footer = layout.footer or { y = 505, height = 30 }
+    local headerLabels = { "#", "Position", "Message", "Delay/Range/Output", "Creator", "Triggered", "Actions" }
+    local cols = self.cols or self:computeCols()
 
-    self:drawRectBorder(0, 0, self.width, win.h, 0.8, 0.4, 0.4, 0.4)
+    self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
     self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
 
-    local tt = (layout.title and layout.title.text) or "EventTrigger Manager"
-    self:drawTextCentre(tt, self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+    self:drawTextCentre("EventTrigger Manager", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
 
-    local divY = header.y + header.height + 2
-    self:drawRect(8, divY, self:getWidth() - 30, 1, 0.7, 0.4, 0.4, 0.4)
+    -- Header divider
+    local divY = self.listY - 4
+    self:drawRect(self.listX, divY, self.listW, 1, 0.7, 0.4, 0.4, 0.4)
 
-    for _, col in ipairs(headerCols) do
-        self:drawText(EventTrigger.fitText(col.text, UIFont.Small, col.w - 4), col.x + 4, header.y + 1, 0.5, 0.5, 0.5, 1, UIFont.Small)
+    for i, col in ipairs(cols) do
+        local label = headerLabels[i] or ""
+        self:drawText(EventTrigger.fitText(label, UIFont.Small, col.w - 4), col.x + 4, self.headerY + 1, 0.5, 0.5, 0.5, 1, UIFont.Small)
     end
 
     local list = self:getFilteredTriggers()
@@ -2176,8 +2221,9 @@ function EventTriggerUI:prerender()
         local entry = list[i]
         local rd = self.rowData[entry.index]
         if rd then
+            local ty = rd.y + (self.rowH - 16) / 2
             for _, col in ipairs(rd.cols) do
-                self:drawText(col.text, col.x, rd.y + 5, col.color[1], col.color[2], col.color[3], 1, UIFont.Small)
+                self:drawText(col.text, col.x, ty, col.color[1], col.color[2], col.color[3], 1, UIFont.Small)
             end
         end
     end
@@ -2188,10 +2234,10 @@ function EventTriggerUI:prerender()
         self:drawTextCentre(txt, self.width / 2, self.listY + 20, 0.45, 0.45, 0.45, 1, UIFont.Small)
     end
 
-    -- Pagination indicator (left of the pagination buttons in footer)
+    -- Pagination indicator (above the pagination buttons in footer)
     if total > rpp then
         local pgText = string.format("Page %d/%d", self.pageNum + 1, tp)
-        self:drawText(pgText, 560, footer.y + 8, 0.6, 0.6, 0.6, 1, UIFont.Small)
+        self:drawText(pgText, self.width - 130, self.footerY + 8, 0.6, 0.6, 0.6, 1, UIFont.Small)
     end
 
     -- Mode indicator in title bar (left side, clear of close button)
@@ -2201,19 +2247,19 @@ end
 
 -- EventTriggerUI constructor: create centered main management panel
 function EventTriggerUI:new()
-    local layout = LoadLayout()
-    local win = layout.window or { x = 0, y = 0, w = 960, h = 520 }
+    local w = EventTrigger.fitW(1020)
+    local h = EventTrigger.fitH(560)
     local sw = getCore():getScreenWidth()
     local sh = getCore():getScreenHeight()
-    local x, y = (sw - win.w) / 2, (sh - win.h) / 2
+    local x, y = (sw - w) / 2, (sh - h) / 2
 
-    local o = ISPanel:new(x, y, win.w, win.h)
+    local o = ISPanel:new(x, y, w, h)
     setmetatable(o, self)
     self.__index = self
     o.borderColor = { r = 0.5, g = 0.5, b = 0.5, a = 1 }
     o.backgroundColor = { r = 0, g = 0, b = 0, a = 0.85 }
-    o.width = win.w
-    o.height = win.h
+    o.width = w
+    o.height = h
     o.dragging = false
     return o
 end
@@ -2235,6 +2281,8 @@ function EventTriggerHistoryUI:create()
 
     self.lines = {}
     local y = 40
+    local F = UIFont.Small
+    local maxW = self.width - 28
 
     -- Close button
     self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerHistoryUI.onClose)
@@ -2244,27 +2292,26 @@ function EventTriggerHistoryUI:create()
     -- Find trigger, show error if not found
     local t = EventTrigger.triggers[self.triggerIndex]
     if not t then
-        self.lines[#self.lines + 1] = { x = 10, y = y, text = "Trigger not found.", color = {1,0.5,0.5} }
+        self.lines[#self.lines + 1] = { x = 14, y = y, text = "Trigger not found.", color = {1,0.5,0.5} }
         return
     end
 
-    -- Trigger info summary line
-    self.lines[#self.lines + 1] = {
-        x = 10, y = y, text = string.format("Position: (%d,%d,%d)  Message: %s  Creator: %s", t.x, t.y, t.z, t.message or "", t.creator or "?"),
-        color = {0.7,0.8,1},
-    }
+    -- Trigger info — split into separate lines so long messages never overlap
+    self.lines[#self.lines + 1] = { x = 14, y = y, text = EventTrigger.fitText(string.format("Position: (%d,%d,%d)", t.x, t.y, t.z), F, maxW), color = {0.5,0.8,1} }
     y = y + 24
+    self.lines[#self.lines + 1] = { x = 14, y = y, text = "Message: " .. EventTrigger.fitText(t.message or "", F, maxW - 90), color = {1,1,1} }
+    y = y + 24
+    self.lines[#self.lines + 1] = { x = 14, y = y, text = "Creator: " .. EventTrigger.fitText(t.creator or "?", F, maxW - 90), color = {0.8,0.8,0.5} }
+    y = y + 28
 
     -- Trigger history list
     local triggeredBy = t.triggeredBy or {}
-    if #triggeredBy == 0 then
-        self.lines[#self.lines + 1] = { x = 10, y = y, text = "No triggers recorded yet.", color = {0.5,0.5,0.5} }
-    else
-        self.lines[#self.lines + 1] = {
-            x = 10, y = y, text = "Total: " .. #triggeredBy .. " trigger(s)", color = {1,1,1},
-        }
-        y = y + 22
+    self.lines[#self.lines + 1] = { x = 14, y = y, text = "Total: " .. #triggeredBy .. " trigger(s)", color = {1,1,1} }
+    y = y + 24
 
+    if #triggeredBy == 0 then
+        self.lines[#self.lines + 1] = { x = 14, y = y, text = "No triggers recorded yet.", color = {0.5,0.5,0.5} }
+    else
         -- Display each trigger history entry
         for i, entry in ipairs(triggeredBy) do
             local pId, tStr
@@ -2279,8 +2326,8 @@ function EventTriggerHistoryUI:create()
             if tStr and #tStr > 0 then
                 line = line .. "  [" .. tStr .. "]"
             end
-            self.lines[#self.lines + 1] = { x = 20, y = y, text = line, color = {0.8,0.9,1} }
-            y = y + 20
+            self.lines[#self.lines + 1] = { x = 22, y = y, text = EventTrigger.fitText(line, F, maxW), color = {0.8,0.9,1} }
+            y = y + 24
             if y > self.height - 30 then break end
         end
     end
@@ -2344,9 +2391,10 @@ end
 
 -- EventTriggerHistoryUI constructor
 function EventTriggerHistoryUI:new(index)
+    local w = EventTrigger.fitW(560)
+    local h = EventTrigger.fitH(460)
     local sw = getCore():getScreenWidth()
     local sh = getCore():getScreenHeight()
-    local w, h = 500, 350
     local x, y = (sw - w) / 2, (sh - h) / 2
 
     local o = ISPanel:new(x, y, w, h)
