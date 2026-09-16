@@ -45,21 +45,48 @@ end
 
 -- ============================================================
 -- Remove items from inventory (collect first, then remove — safe for MP ArrayList)
+-- Only removes items where req.collect ~= false
+-- matchMode: "all" = remove all matching items, "any" = remove only selected matching item
+-- selectedORIndex: index of selected required item in OR mode (1-based)
 -- ============================================================
-function EventTrigger.Delivery.RemoveItems(inventory, requiredItems)
+function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, selectedORIndex)
     local removedData = {}
     local items = inventory:getItems()
+    matchMode = matchMode or "all"
 
     -- Phase 1: collect item references (no ArrayList modification during iteration)
     local toRemoveList = {}
-    for _, req in ipairs(requiredItems) do
-        local remaining = req.count
-        for i = items:size() - 1, 0, -1 do
-            if remaining <= 0 then break end
-            local item = items:get(i)
-            if item and item:getFullType() == req.fullType and item:getDisplayName() == req.displayName then
-                toRemoveList[#toRemoveList + 1] = item
-                remaining = remaining - 1
+    
+    if matchMode == "any" then
+        -- OR mode: only remove from the selected required item
+        local targetIdx = selectedORIndex or 1
+        for idx, req in ipairs(requiredItems) do
+            if req.collect ~= false and idx == targetIdx then
+                local remaining = req.count
+                for i = items:size() - 1, 0, -1 do
+                    if remaining <= 0 then break end
+                    local item = items:get(i)
+                    if item and item:getFullType() == req.fullType and item:getDisplayName() == req.displayName then
+                        toRemoveList[#toRemoveList + 1] = item
+                        remaining = remaining - 1
+                    end
+                end
+                break
+            end
+        end
+    else
+        -- AND mode: collect from all required items
+        for _, req in ipairs(requiredItems) do
+            if req.collect ~= false then
+                local remaining = req.count
+                for i = items:size() - 1, 0, -1 do
+                    if remaining <= 0 then break end
+                    local item = items:get(i)
+                    if item and item:getFullType() == req.fullType and item:getDisplayName() == req.displayName then
+                        toRemoveList[#toRemoveList + 1] = item
+                        remaining = remaining - 1
+                    end
+                end
             end
         end
     end
@@ -110,18 +137,43 @@ function EventTrigger.Delivery.Execute(player, deliveryData)
     local inventory = player:getInventory()
     local requiredItems = deliveryData.requiredItems or {}
     local rewardItems = deliveryData.rewardItems or {}
+    local matchMode = deliveryData.matchMode or "all"
+    local selectedORIndex = deliveryData._selectedORItemIndex
 
     -- Pre-check counts (FullType + DisplayName dual-match)
     local counts = EventTrigger.Delivery.CountItems(inventory, requiredItems)
-    for _, req in ipairs(requiredItems) do
-        local key = req.fullType .. "|" .. req.displayName
-        if (counts[key] or 0) < req.count then
+    
+    if matchMode == "any" then
+        -- OR logic: player needs at least ONE of the required items
+        local hasAny = false
+        for _, req in ipairs(requiredItems) do
+            local key = req.fullType .. "|" .. req.displayName
+            if (counts[key] or 0) >= req.count then
+                hasAny = true
+                break
+            end
+        end
+        if not hasAny then
             return false, "Missing required items in backpack!"
+        end
+    else
+        -- AND logic (default): player needs ALL required items
+        for _, req in ipairs(requiredItems) do
+            local key = req.fullType .. "|" .. req.displayName
+            if (counts[key] or 0) < req.count then
+                return false, "Missing required items in backpack!"
+            end
         end
     end
 
-    -- Remove required items
-    local removedData = EventTrigger.Delivery.RemoveItems(inventory, requiredItems)
+    -- Check cooldown
+    local cooldownOk, cooldownMsg = EventTrigger.Delivery.CheckCooldown(player, deliveryData)
+    if not cooldownOk then
+        return false, cooldownMsg
+    end
+
+    -- Remove required items (only for items that match in OR mode, or all in AND mode)
+    local removedData = EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, selectedORIndex)
 
     -- Grant rewards (with rollback on failure)
     local granted = EventTrigger.Delivery.GrantRewards(inventory, rewardItems)
@@ -145,13 +197,74 @@ end
 function EventTrigger.Delivery.Validate(player, deliveryData)
     if not player or not deliveryData then return false, "Invalid data" end
     local inventory = player:getInventory()
-    local counts = EventTrigger.Delivery.CountItems(inventory, deliveryData.requiredItems or {})
-    for _, req in ipairs(deliveryData.requiredItems or {}) do
-        local key = req.fullType .. "|" .. req.displayName
-        if (counts[key] or 0) < req.count then
+    local requiredItems = deliveryData.requiredItems or {}
+    local matchMode = deliveryData.matchMode or "all"
+    local counts = EventTrigger.Delivery.CountItems(inventory, requiredItems)
+    
+    if matchMode == "any" then
+        -- OR logic: player needs at least ONE of the required items
+        local hasAny = false
+        for _, req in ipairs(requiredItems) do
+            local key = req.fullType .. "|" .. req.displayName
+            if (counts[key] or 0) >= req.count then
+                hasAny = true
+                break
+            end
+        end
+        if not hasAny then
             return false, "Missing required items in backpack!"
         end
+    else
+        -- AND logic (default): player needs ALL required items
+        for _, req in ipairs(requiredItems) do
+            local key = req.fullType .. "|" .. req.displayName
+            if (counts[key] or 0) < req.count then
+                return false, "Missing required items in backpack!"
+            end
+        end
     end
+    
+    -- Check cooldown
+    local cooldownOk, cooldownMsg = EventTrigger.Delivery.CheckCooldown(player, deliveryData)
+    if not cooldownOk then
+        return false, cooldownMsg
+    end
+    
+    return true, ""
+end
+
+-- ============================================================
+-- Check cooldown for delivery
+-- ============================================================
+function EventTrigger.Delivery.CheckCooldown(player, deliveryData)
+    local cooldownType = deliveryData.cooldownType or 0
+    local cooldownValue = deliveryData.cooldownValue or 0
+    if cooldownType == 0 or cooldownValue <= 0 then
+        return true, ""
+    end
+    
+    local playerKey = player:getUsername() or tostring(player:getOnlineID())
+    local playerCooldowns = deliveryData.playerCooldowns or {}
+    local lastDelivery = playerCooldowns[playerKey]
+    if not lastDelivery then
+        return true, ""
+    end
+    
+    local now
+    if cooldownType == 1 then
+        -- Game time (in minutes)
+        now = getGameTime():getWorldAgeHours() * 60
+    else
+        -- Real time (in minutes)
+        now = os.time() / 60
+    end
+    
+    local elapsed = now - lastDelivery
+    if elapsed < cooldownValue then
+        local remaining = math.ceil(cooldownValue - elapsed)
+        return false, string.format("Cooldown active! Wait %d more minutes.", remaining)
+    end
+    
     return true, ""
 end
 
@@ -367,6 +480,26 @@ function EventTrigger.Delivery.ShowDeliveryConfirm(player, delivery)
     if EventTrigger.Delivery._confirmUI then
         EventTrigger.Delivery._confirmUI:close()
     end
+    if EventTrigger.Delivery._itemSelectUI then
+        EventTrigger.Delivery._itemSelectUI:close()
+    end
+    
+    local matchMode = delivery.matchMode or "all"
+    if matchMode == "any" then
+        -- Check if there are multiple matching items with collect=true
+        local collectCount = 0
+        for _, req in ipairs(delivery.requiredItems or {}) do
+            if req.collect ~= false then
+                collectCount = collectCount + 1
+            end
+        end
+        if collectCount > 1 then
+            -- Show item selection UI for OR mode
+            EventTrigger.Delivery.ShowItemSelectForOR(player, delivery)
+            return
+        end
+    end
+    
     local ui = EventTriggerDeliveryConfirm:new(player, delivery)
     ui:initialise()
     ui:addToUIManager()
@@ -419,6 +552,23 @@ function EventTriggerDeliveryConfirm:onConfirm()
     EventTrigger.Delivery._pendingDpId[playerKey] = nil
     self:close()
 
+    -- Determine selectedORIndex for OR mode
+    local matchMode = delivery.matchMode or "all"
+    local selectedORIndex = nil
+    if matchMode == "any" then
+        local collectCount = 0
+        local targetIdx = nil
+        for idx, req in ipairs(delivery.requiredItems or {}) do
+            if req.collect ~= false then
+                collectCount = collectCount + 1
+                targetIdx = idx
+            end
+        end
+        if collectCount == 1 then
+            selectedORIndex = targetIdx
+        end
+    end
+
     if EventTrigger.IsMultiplayer() then
         -- Client validates (dual-match), server executes all inventory (PZ Marketplace pattern)
         local ok, msg = EventTrigger.Delivery.Validate(player, delivery)
@@ -426,8 +576,15 @@ function EventTriggerDeliveryConfirm:onConfirm()
             HaloTextHelper.addBadText(player, msg)
             return
         end
-        sendClientCommand("EventTrigger", "confirmDelivery", { id = delivery.id })
+        local args = { id = delivery.id }
+        if selectedORIndex then
+            args.selectedORIndex = selectedORIndex
+        end
+        sendClientCommand("EventTrigger", "confirmDelivery", args)
     else
+        if selectedORIndex then
+            delivery._selectedORItemIndex = selectedORIndex
+        end
         local ok, msg = EventTrigger.Delivery.Execute(player, delivery)
         if ok then
             HaloTextHelper.addGoodText(player, msg)
@@ -503,6 +660,17 @@ function EventTriggerDeliveryConfirm:prerender()
     local rightX = midX + 10
     local y = self.itemY
 
+    -- Show match mode and cooldown info
+    local modeText = "Match Mode: " .. (delivery.matchMode == "any" and "ANY (OR logic)" or "ALL (AND logic)")
+    self:drawText(modeText, leftX, y, 0.9, 0.9, 0.3, 1, UIFont.Small)
+    y = y + 20
+    
+    if delivery.cooldownType and delivery.cooldownType > 0 and delivery.cooldownValue > 0 then
+        local cdText = "Cooldown: " .. (delivery.cooldownType == 1 and "Game Time" or "Real Time") .. " " .. delivery.cooldownValue .. " min"
+        self:drawText(cdText, leftX, y, 0.7, 0.9, 0.7, 1, UIFont.Small)
+        y = y + 20
+    end
+
     -- Left: Required Items
     self:drawText("--- Required Items ---", leftX, y, 0.9, 0.7, 0.3, 1, UIFont.Small)
     y = y + 20
@@ -511,8 +679,10 @@ function EventTriggerDeliveryConfirm:prerender()
         self:drawText("(none)", leftX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
     else
         for _, req in ipairs(reqItems) do
-            local txt = req.displayName .. "  x" .. tostring(req.count)
-            self:drawText(txt, leftX + 8, y, 1, 1, 1, 1, UIFont.Small)
+            local collectStr = (req.collect ~= false) and " (collect)" or " (check only)"
+            local txt = req.displayName .. "  x" .. tostring(req.count) .. collectStr
+            local color = (req.collect ~= false) and {1, 1, 1} or {0.7, 0.9, 0.7}
+            self:drawText(txt, leftX + 8, y, color[1], color[2], color[3], 1, UIFont.Small)
             y = y + 18
             if y > self.height - 60 then break end
         end
@@ -558,12 +728,302 @@ function EventTriggerDeliveryConfirm:new(player, delivery)
 end
 
 -- ============================================================
+-- Item Selection UI for OR mode (choose which item to use)
+-- ============================================================
+EventTrigger.Delivery._itemSelectUI = nil
+
+function EventTrigger.Delivery.ShowItemSelectForOR(player, delivery)
+    if EventTrigger.Delivery._itemSelectUI then
+        EventTrigger.Delivery._itemSelectUI:close()
+    end
+    local ui = EventTriggerDeliveryItemSelectOR:new(player, delivery)
+    ui:initialise()
+    ui:addToUIManager()
+    EventTrigger.Delivery._itemSelectUI = ui
+end
+
+EventTriggerDeliveryItemSelectOR = ISPanel:derive("EventTriggerDeliveryItemSelectOR")
+
+function EventTriggerDeliveryItemSelectOR:initialise()
+    ISPanel.initialise(self)
+    self:create()
+end
+
+function EventTriggerDeliveryItemSelectOR:create()
+    self:setAlwaysOnTop(true)
+
+    local bw, bh = 120, 30
+    local gap = 20
+    local totalW = bw * 2 + gap
+    local btnY = self.height - 50
+    local confX = (self.width - totalW) / 2
+    local cancX = confX + bw + gap
+
+    self.confirmBtn = ISButton:new(confX, btnY, bw, bh, "Confirm", self, EventTriggerDeliveryItemSelectOR.onConfirm)
+    self.confirmBtn:initialise()
+    self:addChild(self.confirmBtn)
+
+    self.cancelBtn = ISButton:new(cancX, btnY, bw, bh, "Cancel", self, EventTriggerDeliveryItemSelectOR.onCancel)
+    self.cancelBtn:initialise()
+    self:addChild(self.cancelBtn)
+
+    self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerDeliveryItemSelectOR.onCancel)
+    self.closeBtn:initialise()
+    self:addChild(self.closeBtn)
+
+    self.itemY = 36
+    self.selectedItemIndex = nil
+
+    -- Find matching items in player inventory
+    self:findMatchingItems()
+end
+
+function EventTriggerDeliveryItemSelectOR:findMatchingItems()
+    self.matchingItems = {}
+    local player = getPlayer()
+    if not player then return end
+    local inv = player:getInventory()
+    if not inv then return end
+    local items = inv:getItems()
+    
+    for _, req in ipairs(self.delivery.requiredItems or {}) do
+        if req.collect ~= false then
+            for i = 0, items:size() - 1 do
+                local item = items:get(i)
+                if item and item:getFullType() == req.fullType and item:getDisplayName() == req.displayName then
+                    table.insert(self.matchingItems, {
+                        req = req,
+                        item = item,
+                        fullType = item:getFullType(),
+                        displayName = item:getDisplayName(),
+                    })
+                end
+            end
+        end
+    end
+end
+
+function EventTriggerDeliveryItemSelectOR:onConfirm()
+    if not self.selectedItemIndex then
+        HaloTextHelper.addBadText(getPlayer(), "Please select an item to use!")
+        return
+    end
+    
+    local player = getPlayer()
+    local playerKey = player and (player:getUsername() or "")
+    if playerKey then
+        EventTrigger.Delivery._activePrompt[playerKey] = nil
+        EventTrigger.Delivery._pendingDpId[playerKey] = nil
+    end
+    self:close()
+    
+    -- Store selected item index for Execute
+    self.delivery._selectedORItemIndex = self.selectedItemIndex
+    
+    if EventTrigger.IsMultiplayer() then
+        local ok, msg = EventTrigger.Delivery.Validate(player, self.delivery)
+        if not ok then
+            HaloTextHelper.addBadText(player, msg)
+            return
+        end
+        sendClientCommand("EventTrigger", "confirmDelivery", { id = self.delivery.id, selectedORIndex = self.selectedItemIndex })
+    else
+        local ok, msg = EventTrigger.Delivery.Execute(player, self.delivery)
+        if ok then
+            HaloTextHelper.addGoodText(player, msg)
+            self.delivery.triggerCount = (self.delivery.triggerCount or 0) + 1
+            if not self.delivery.triggeredBy then self.delivery.triggeredBy = {} end
+            if not self.delivery.playerDeliveries then self.delivery.playerDeliveries = {} end
+            self.delivery.playerDeliveries[playerKey] = (self.delivery.playerDeliveries[playerKey] or 0) + 1
+            local ts, tsStr = EventTrigger.GetTimestamp()
+            table.insert(self.delivery.triggeredBy, { playerId = playerKey, timestamp = ts, timeStr = tsStr })
+            EventTrigger._saveToModData()
+        else
+            HaloTextHelper.addBadText(player, msg)
+        end
+    end
+end
+
+function EventTriggerDeliveryItemSelectOR:onCancel()
+    local player = getPlayer()
+    local playerKey = player and (player:getUsername() or "")
+    if playerKey then
+        EventTrigger.Delivery._activePrompt[playerKey] = nil
+        EventTrigger.Delivery._pendingDpId[playerKey] = nil
+    end
+    self:close()
+end
+
+function EventTriggerDeliveryItemSelectOR:close()
+    if EventTrigger.Delivery._itemSelectUI == self then
+        EventTrigger.Delivery._itemSelectUI = nil
+    end
+    self:setVisible(false)
+    self:removeFromUIManager()
+end
+
+function EventTriggerDeliveryItemSelectOR:onMouseDown(x, y)
+    if y >= 0 and y < 28 then
+        self.dragging = true
+        self.dragOfsX = getMouseX() - self.x
+        self.dragOfsY = getMouseY() - self.y
+        self:setCapture(true)
+        return true
+    end
+    return ISPanel.onMouseDown(self, x, y)
+end
+
+function EventTriggerDeliveryItemSelectOR:onMouseMove(x, y)
+    if self.dragging then
+        self:setX(getMouseX() - self.dragOfsX)
+        self:setY(getMouseY() - self.dragOfsY)
+        return true
+    end
+end
+
+function EventTriggerDeliveryItemSelectOR:onMouseUp(x, y)
+    if self.dragging then
+        self.dragging = false
+        self:setCapture(false)
+        return true
+    end
+end
+
+function EventTriggerDeliveryItemSelectOR:prerender()
+    ISPanel.prerender(self)
+    self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
+    self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
+    self:drawTextCentre("Select Item for Delivery", self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+
+    local delivery = self.delivery
+    if not delivery then return end
+
+    local midX = self.width / 2
+    local leftX = 10
+    local y = self.itemY
+
+    -- Show match mode info
+    local modeText = "Match Mode: " .. (delivery.matchMode == "any" and "ANY (OR logic)" or "ALL (AND logic)")
+    self:drawText(modeText, leftX, y, 0.9, 0.9, 0.3, 1, UIFont.Small)
+    y = y + 22
+    
+    if delivery.cooldownType and delivery.cooldownType > 0 and delivery.cooldownValue > 0 then
+        local cdText = "Cooldown: " .. (delivery.cooldownType == 1 and "Game Time" or "Real Time") .. " " .. delivery.cooldownValue .. " min"
+        self:drawText(cdText, leftX, y, 0.7, 0.9, 0.7, 1, UIFont.Small)
+        y = y + 22
+    end
+
+    -- Required items (with checkboxes for selection)
+    self:drawText("--- Required Items (select one) ---", leftX, y, 0.9, 0.7, 0.3, 1, UIFont.Small)
+    y = y + 20
+    local reqItems = delivery.requiredItems or {}
+    
+    if #reqItems == 0 then
+        self:drawText("(none)", leftX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
+    else
+        for idx, req in ipairs(reqItems) do
+            -- Check if player has this item
+            local hasItem = false
+            for _, mi in ipairs(self.matchingItems or {}) do
+                if mi.req == req then
+                    hasItem = true
+                    break
+                end
+            end
+            
+            local collectStr = (req.collect ~= false) and " (collect)" or " (check only)"
+            local txt = req.displayName .. "  x" .. tostring(req.count) .. collectStr .. (hasItem and " [AVAILABLE]" or " [MISSING]")
+            local color = hasItem and {1, 1, 1} or {0.7, 0.3, 0.3}
+            
+            -- Draw selection indicator
+            if idx == self.selectedItemIndex then
+                self:drawRect(leftX + 4, y + 2, 16, 16, 0.8, 0.2, 0.8, 0.2)
+                self:drawRectBorder(leftX + 4, y + 2, 16, 16, 1, 1, 0.5, 0.5)
+            else
+                self:drawRectBorder(leftX + 4, y + 2, 16, 16, 0.5, 0.5, 0.5, 0.5)
+            end
+            
+            self:drawText(txt, leftX + 24, y, color[1], color[2], color[3], 1, UIFont.Small)
+            y = y + 22
+            if y > self.height - 70 then break end
+        end
+    end
+
+    -- Right: Reward Items
+    y = self.itemY
+    local rightX = midX + 10
+    self:drawText("--- Reward Items ---", rightX, y, 0.3, 0.9, 0.5, 1, UIFont.Small)
+    y = y + 20
+    local rewItems = delivery.rewardItems or {}
+    if #rewItems == 0 then
+        self:drawText("(none)", rightX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
+    else
+        for _, rew in ipairs(rewItems) do
+            local txt = rew.displayName .. "  x" .. tostring(rew.count)
+            self:drawText(txt, rightX + 8, y, 1, 1, 1, 1, UIFont.Small)
+            y = y + 18
+            if y > self.height - 70 then break end
+        end
+    end
+
+    -- Vertical divider
+    self:drawRect(midX, self.itemY, 1, self.height - self.itemY - 60, 0.4, 0.4, 0.4, 0.4)
+end
+
+function EventTriggerDeliveryItemSelectOR:onMouseDown(x, y)
+    if y >= 0 and y < 28 then
+        self.dragging = true
+        self.dragOfsX = getMouseX() - self.x
+        self.dragOfsY = getMouseY() - self.y
+        self:setCapture(true)
+        return true
+    end
+    
+    -- Check for item selection clicks (start Y must match prerender layout)
+    local leftX = 10
+    local startY = self.itemY + 42
+    if self.delivery.cooldownType and self.delivery.cooldownType > 0 and self.delivery.cooldownValue > 0 then
+        startY = startY + 22
+    end
+    local reqItems = self.delivery.requiredItems or {}
+
+    for idx, req in ipairs(reqItems) do
+        local itemY = startY + (idx - 1) * 22
+        if y >= itemY and y <= itemY + 20 and x >= leftX and x <= leftX + 20 then
+            self.selectedItemIndex = idx
+            return true
+        end
+    end
+    
+    return ISPanel.onMouseDown(self, x, y)
+end
+
+function EventTriggerDeliveryItemSelectOR:new(player, delivery)
+    local sw = getCore():getScreenWidth()
+    local sh = getCore():getScreenHeight()
+    local w, h = 500, 400
+    local x, y = (sw - w) / 2, (sh - h) / 2
+
+    local o = ISPanel:new(x, y, w, h)
+    setmetatable(o, self)
+    self.__index = self
+    o.borderColor = { r = 0.5, g = 0.5, b = 0.5, a = 1 }
+    o.backgroundColor = { r = 0, g = 0, b = 0, a = 0.9 }
+    o.width = w
+    o.height = h
+    o.player = player
+    o.delivery = delivery
+    o.dragging = false
+    return o
+end
+
+-- ============================================================
 -- Delivery Point Setup Wizard (Section 3)
 -- ============================================================
 EventTrigger.Delivery._setupPending = nil
 
 function EventTrigger.Delivery.StartSetup(x, y, z)
-    EventTrigger.Delivery._setupPending = { x = x, y = y, z = z, requiredItems = {}, rewardItems = {}, maxPlayers = -1, maxPerPlayer = -1 }
+    EventTrigger.Delivery._setupPending = { x = x, y = y, z = z, requiredItems = {}, rewardItems = {}, maxPlayers = -1, maxPerPlayer = -1, matchMode = "all", cooldownType = 0, cooldownValue = 0 }
     EventTrigger.Delivery.PromptHintText()
 end
 
@@ -628,6 +1088,56 @@ function EventTrigger.Delivery.PromptDeliveryLimits()
                 if maxPerPlayer < -1 then maxPerPlayer = -1 end
                 p.maxPlayers = maxPlayers
                 p.maxPerPlayer = maxPerPlayer
+                EventTrigger.Delivery.PromptMatchMode()
+            else
+                EventTrigger.Delivery._setupPending = nil
+            end
+        end)
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+function EventTrigger.Delivery.PromptMatchMode()
+    local p = EventTrigger.Delivery._setupPending
+    if not p then return end
+    local defaultMode = p.matchMode or "all"
+    if not p._editing then defaultMode = "all" end
+    local modal = ISTextBox:new(0, 0, 420, 240,
+        "Match Mode:\n- all = require ALL items (AND logic)\n- any = require ANY one item (OR logic)\n\nEnter 'all' or 'any'",
+        defaultMode, nil,
+        function(target, button)
+            if button.internal == "OK" then
+                local mode = string.lower(string.trim(button.parent.entry:getText() or ""))
+                if mode ~= "all" and mode ~= "any" then mode = "all" end
+                p.matchMode = mode
+                EventTrigger.Delivery.PromptCooldown()
+            else
+                EventTrigger.Delivery._setupPending = nil
+            end
+        end)
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+function EventTrigger.Delivery.PromptCooldown()
+    local p = EventTrigger.Delivery._setupPending
+    if not p then return end
+    local defaultType = p.cooldownType or 0
+    local defaultValue = p.cooldownValue or 0
+    if not p._editing then defaultType = 0; defaultValue = 0 end
+    local modal = ISTextBox:new(0, 0, 420, 280,
+        "Cooldown Settings:\nType: 0=none, 1=game time (minutes), 2=real time (minutes)\nValue: cooldown minutes (0 = no cooldown)\n\nFormat: Type, Value\nExample: 1, 30 = 30 minutes game time cooldown",
+        string.format("%d, %d", defaultType, defaultValue), nil,
+        function(target, button)
+            if button.internal == "OK" then
+                local text = button.parent.entry:getText()
+                local parts = luautils.split(text, ",")
+                local cooldownType = tonumber(parts[1]) or 0
+                local cooldownValue = tonumber(parts[2]) or 0
+                if cooldownType < 0 or cooldownType > 2 then cooldownType = 0 end
+                if cooldownValue < 0 then cooldownValue = 0 end
+                p.cooldownType = cooldownType
+                p.cooldownValue = cooldownValue
                 EventTrigger.Delivery.PromptRequiredItems()
             else
                 EventTrigger.Delivery._setupPending = nil
@@ -961,6 +1471,25 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
         self:addChild(ftLbl)
         table.insert(self.selectedChildren, ftLbl)
 
+        -- Collect checkbox (only for required items)
+        if mode == "required" then
+            local collect = si.collect ~= false
+            local cbX = x + 4
+            local cbY = y + 8
+            local collectLbl = ISLabel:new(cbX + 20, cbY, 18, "Collect", 0.7, 0.9, 0.7, 1, UIFont.Small, true)
+            collectLbl:initialise()
+            self:addChild(collectLbl)
+            table.insert(self.selectedChildren, collectLbl)
+
+            local collectCB = ISTickBox:new(cbX, cbY, 18, 18, "", self, EventTriggerDeliveryItemSelect.onToggleCollect)
+            collectCB:initialise()
+            collectCB:addOption("")
+            collectCB.selected[1] = collect
+            collectCB.itemIndex = i + 1
+            self:addChild(collectCB)
+            table.insert(self.selectedChildren, collectCB)
+        end
+
         -- Buttons on right — Qty and X with gap
         local btnX = x + self.rightW - 62
         local btnY = y + 8
@@ -1008,6 +1537,7 @@ function EventTriggerDeliveryItemSelect:onAddItem(btn)
         fullType = btn.itemFullType,
         displayName = btn.itemDisplayName,
         count = 1,
+        collect = true,
     })
 
     self:refreshUI()
@@ -1064,6 +1594,21 @@ function EventTriggerDeliveryItemSelect:onDelItem(btn)
         table.remove(itemList, btn.itemIndex)
     end
     self:refreshUI()
+end
+
+-- Toggle collect checkbox for required items
+function EventTriggerDeliveryItemSelect:onToggleCollect(tickbox)
+    local p = EventTrigger.Delivery._setupPending
+    if not p then return end
+    local mode = EventTrigger.Delivery._selectionMode or "required"
+    if mode ~= "required" then return end
+
+    local itemList = p.requiredItems
+    local idx = tickbox.itemIndex
+    if idx >= 1 and idx <= #itemList then
+        itemList[idx].collect = tickbox.selected[1] == true
+        self:refreshUI()
+    end
 end
 
 function EventTriggerDeliveryItemSelect:onDone()
@@ -1185,6 +1730,9 @@ function EventTrigger.Delivery.PlacePending()
         range = p.radius or 3.0,
         maxPlayers = p.maxPlayers or -1,
         maxPerPlayer = p.maxPerPlayer or -1,
+        matchMode = p.matchMode or "all",
+        cooldownType = p.cooldownType or 0,
+        cooldownValue = p.cooldownValue or 0,
         requiredItems = p.requiredItems or {},
         rewardItems = p.rewardItems or {},
         creator = EventTrigger.GetCurrentPlayerId(),
@@ -1192,6 +1740,7 @@ function EventTrigger.Delivery.PlacePending()
 
     dbg("PlacePending: placing delivery at (", p.x, p.y, p.z, "), hint=", p.hintText,
         " reqItems=", #args.requiredItems, " rewardItems=", #args.rewardItems,
+        " matchMode=", args.matchMode, " cooldownType=", args.cooldownType, " cooldownValue=", args.cooldownValue,
         " editing=", tostring(isEditing))
 
     if isEditing then
@@ -1203,6 +1752,9 @@ function EventTrigger.Delivery.PlacePending()
             dp.range = p.radius or 3.0
             dp.maxPlayers = p.maxPlayers or -1
             dp.maxPerPlayer = p.maxPerPlayer or -1
+            dp.matchMode = p.matchMode or "all"
+            dp.cooldownType = p.cooldownType or 0
+            dp.cooldownValue = p.cooldownValue or 0
             dp.requiredItems = p.requiredItems or {}
             dp.rewardItems = p.rewardItems or {}
             if EventTrigger.IsMultiplayer() then
@@ -1228,9 +1780,13 @@ function EventTrigger.Delivery.PlacePending()
             range = p.radius or 3.0,
             maxPlayers = p.maxPlayers or -1,
             maxPerPlayer = p.maxPerPlayer or -1,
+            matchMode = p.matchMode or "all",
+            cooldownType = p.cooldownType or 0,
+            cooldownValue = p.cooldownValue or 0,
             requiredItems = p.requiredItems or {},
             rewardItems = p.rewardItems or {},
             playerDeliveries = {},
+            playerCooldowns = {},
             creator = EventTrigger.GetCurrentPlayerId(),
             createdAt = os.time(),
             triggerCount = 0,
@@ -1250,9 +1806,13 @@ function EventTrigger.Delivery.PlacePending()
             range = p.radius or 3.0,
             maxPlayers = p.maxPlayers or -1,
             maxPerPlayer = p.maxPerPlayer or -1,
+            matchMode = p.matchMode or "all",
+            cooldownType = p.cooldownType or 0,
+            cooldownValue = p.cooldownValue or 0,
             requiredItems = p.requiredItems or {},
             rewardItems = p.rewardItems or {},
             playerDeliveries = {},
+            playerCooldowns = {},
             creator = EventTrigger.GetCurrentPlayerId(),
             createdAt = os.time(),
             triggerCount = 0,
@@ -1341,6 +1901,9 @@ function EventTrigger.Delivery.EditDelivery(dlvIdx, dp)
         radius = dp.range,
         maxPlayers = dp.maxPlayers or -1,
         maxPerPlayer = dp.maxPerPlayer or -1,
+        matchMode = dp.matchMode or "all",
+        cooldownType = dp.cooldownType or 0,
+        cooldownValue = dp.cooldownValue or 0,
         requiredItems = EventTrigger.Delivery._cloneItems(dp.requiredItems or {}),
         rewardItems = EventTrigger.Delivery._cloneItems(dp.rewardItems or {}),
         _editing = true,
@@ -1409,7 +1972,29 @@ function EventTriggerDeliveryHistUI:create()
         x = 10, y = y, text = string.format("Range: %.1f  Status: %s", dp.range or 3, (dp.triggerCount or 0) > 0 and "Completed" or "Ready"),
         color = {1,1,1},
     }
-    y = y + 24
+    y = y + 22
+    
+    -- Match mode and cooldown
+    local modeText = "Match Mode: " .. (dp.matchMode == "any" and "ANY (OR logic)" or "ALL (AND logic)")
+    self.lines[#self.lines + 1] = { x = 10, y = y, text = modeText, color = {0.9,0.9,0.3} }
+    y = y + 18
+    
+    if dp.cooldownType and dp.cooldownType > 0 and dp.cooldownValue > 0 then
+        local cdText = "Cooldown: " .. (dp.cooldownType == 1 and "Game Time" or "Real Time") .. " " .. dp.cooldownValue .. " min"
+        self.lines[#self.lines + 1] = { x = 10, y = y, text = cdText, color = {0.7,0.9,0.7} }
+        y = y + 18
+    end
+    
+    if dp.maxPlayers and dp.maxPlayers > 0 then
+        self.lines[#self.lines + 1] = { x = 10, y = y, text = "Max Players: " .. dp.maxPlayers, color = {0.8,0.8,1} }
+        y = y + 18
+    end
+    if dp.maxPerPlayer and dp.maxPerPlayer > 0 then
+        self.lines[#self.lines + 1] = { x = 10, y = y, text = "Max Per Player: " .. dp.maxPerPlayer, color = {0.8,0.8,1} }
+        y = y + 18
+    end
+    
+    y = y + 6
 
     -- Required items
     self.lines[#self.lines + 1] = { x = 10, y = y, text = "--- Required Items ---", color = {0.9,0.7,0.3} }
@@ -1420,7 +2005,8 @@ function EventTriggerDeliveryHistUI:create()
         y = y + 20
     else
         for _, item in ipairs(reqItems) do
-            local txt = item.displayName .. " x" .. tostring(item.count) .. "  [" .. item.fullType .. "]"
+            local collectStr = (item.collect ~= false) and " (collect)" or " (check only)"
+            local txt = item.displayName .. " x" .. tostring(item.count) .. collectStr .. "  [" .. item.fullType .. "]"
             self.lines[#self.lines + 1] = { x = 20, y = y, text = txt, color = {1,1,1} }
             y = y + 18
         end

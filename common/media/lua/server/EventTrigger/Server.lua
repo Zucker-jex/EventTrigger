@@ -482,25 +482,98 @@ Server.onClientCommand = function(module, command, player, args)
             return
         end
 
-        -- 1. Remove required items (exact PZ Marketplace pattern: Remove + contains check + sync)
-        local items = inv:getItems()
-        for _, req in ipairs(dp.requiredItems or {}) do
-            local toRemove = req.count
-            for i = items:size() - 1, 0, -1 do
-                if toRemove <= 0 then break end
-                local it = items:get(i)
-                if it and it:getFullType() == req.fullType and inv:contains(it) then
-                    inv:Remove(it)
-                    sendRemoveItemFromContainer(inv, it)
-                    toRemove = toRemove - 1
+        local pid = getPlayerId(player)
+        local matchMode = dp.matchMode or "all"
+        local cooldownType = dp.cooldownType or 0
+        local cooldownValue = dp.cooldownValue or 0
+        local selectedORIndex = args.selectedORIndex
+
+        -- Check cooldown
+        if cooldownType ~= 0 and cooldownValue > 0 then
+            dp.playerCooldowns = dp.playerCooldowns or {}
+            local lastDelivery = dp.playerCooldowns[pid]
+            if lastDelivery then
+                local now
+                if cooldownType == 1 then
+                    -- Game time (in minutes)
+                    now = getGameTime():getWorldAgeHours() * 60
+                else
+                    -- Real time (in minutes)
+                    now = os.time() / 60
+                end
+                local elapsed = now - lastDelivery
+                if elapsed < cooldownValue then
+                    local remaining = math.ceil(cooldownValue - elapsed)
+                    sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
+                        action = "failed", reason = string.format("Cooldown active! Wait %d more minutes.", remaining),
+                    })
+                    return
                 end
             end
-            if toRemove > 0 then
+        end
+
+        -- 1. Check and remove required items
+        local items = inv:getItems()
+        local hasRequired = false
+        local matchedReq = nil
+
+        if matchMode == "any" then
+            -- OR mode: use selected item index or find first matching
+            local targetIdx = selectedORIndex or 1
+            local idx = 0
+            for _, req in ipairs(dp.requiredItems or {}) do
+                idx = idx + 1
+                if idx == targetIdx then
+                    local toRemove = req.count
+                    local found = false
+                    for i = items:size() - 1, 0, -1 do
+                        if toRemove <= 0 then break end
+                        local it = items:get(i)
+                        if it and it:getFullType() == req.fullType and inv:contains(it) then
+                            found = true
+                            if req.collect ~= false then
+                                inv:Remove(it)
+                                sendRemoveItemFromContainer(inv, it)
+                                toRemove = toRemove - 1
+                            end
+                        end
+                    end
+                    if found then
+                        hasRequired = true
+                        matchedReq = req
+                    end
+                    break
+                end
+            end
+            if not hasRequired then
                 sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
                     action = "failed", reason = "Missing required items in backpack!",
                 })
                 return
             end
+        else
+            -- AND mode (default): check all required items
+            for _, req in ipairs(dp.requiredItems or {}) do
+                local toRemove = req.count
+                for i = items:size() - 1, 0, -1 do
+                    if toRemove <= 0 then break end
+                    local it = items:get(i)
+                    if it and it:getFullType() == req.fullType and inv:contains(it) then
+                        if req.collect ~= false then
+                            inv:Remove(it)
+                            sendRemoveItemFromContainer(inv, it)
+                            toRemove = toRemove - 1
+                        end
+                    end
+                end
+                if toRemove > 0 then
+                    sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
+                        action = "failed", reason = "Missing required items in backpack!",
+                    })
+                    return
+                end
+            end
+            hasRequired = true
         end
 
         -- 2. Add reward items (exact PZ Marketplace pattern: AddItem + sync)
@@ -525,6 +598,17 @@ Server.onClientCommand = function(module, command, player, args)
             playerId = pid, timestamp = os.time(),
             timeStr = os.date("!%Y-%m-%d %H:%M:%S"),
         })
+        
+        -- Update cooldown timestamp
+        if cooldownType ~= 0 and cooldownValue > 0 then
+            dp.playerCooldowns = dp.playerCooldowns or {}
+            if cooldownType == 1 then
+                dp.playerCooldowns[pid] = getGameTime():getWorldAgeHours() * 60
+            else
+                dp.playerCooldowns[pid] = os.time() / 60
+            end
+        end
+        
         Persistence.saveOneDeliveryPoint(dp)
         Logger:info("ConfirmDelivery: dp=%s player=%s count=%d", dp.id, pid, dp.triggerCount)
 

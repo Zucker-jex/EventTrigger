@@ -150,6 +150,7 @@ EventTriggerShared.makeDeliveryItem = function(args)
         fullType    = tostring(args.fullType or ""),
         displayName = tostring(args.displayName or ""),
         count       = math.max(1, args.count or 1),
+        collect     = args.collect ~= false,
     }
 end
 
@@ -165,9 +166,13 @@ EventTriggerShared.makeDeliveryPoint = function(args)
         range         = math.max(0.5, args.range or 3),
         requiredItems = args.requiredItems or {},
         rewardItems   = args.rewardItems or {},
+        matchMode     = args.matchMode or "all",  -- "all" = AND logic, "any" = OR logic
         maxPlayers    = math.max(-1, args.maxPlayers or -1),
         maxPerPlayer  = math.max(-1, args.maxPerPlayer or -1),
+        cooldownType  = args.cooldownType or 0,   -- 0 = none, 1 = game time, 2 = real time
+        cooldownValue = args.cooldownValue or 0,  -- cooldown in minutes
         playerDeliveries = args.playerDeliveries or {},  -- playerId -> count
+        playerCooldowns  = args.playerCooldowns or {},   -- playerId -> last delivery timestamp
         triggerCount  = args.triggerCount or 0,
         triggeredBy   = args.triggeredBy or {},
         creator       = tostring(args.creator or "unknown"),

@@ -1715,7 +1715,6 @@ end
 function EventTriggerUI:getFilteredTriggers()
     local all = EventTrigger.triggers
     local allDlv = EventTrigger.deliveryPoints or {}
-    dbg("getFilteredTriggers: total triggers=", #all, "delivery points=", #allDlv, "multiplayer=", tostring(EventTrigger.IsMultiplayer()), "viewAll=", tostring(self.viewAll))
 
     local function buildList()
         local list = {}
@@ -1734,20 +1733,15 @@ function EventTriggerUI:getFilteredTriggers()
 
     -- SP always shows all
     if not EventTrigger.IsMultiplayer() then
-        local list = buildList()
-        dbg("getFilteredTriggers: singleplayer, showing all", #list, "entries")
-        return list
+        return buildList()
     end
 
     -- MP: show all or filter by creator
     if self.viewAll then
-        local list = buildList()
-        dbg("getFilteredTriggers: viewAll=true, showing all", #list, "entries")
-        return list
+        return buildList()
     end
 
     local myId = EventTrigger.GetCurrentPlayerId()
-    dbg("getFilteredTriggers: filtering by creator=", myId)
     local filtered = {}
     for i, t in ipairs(all) do
         if t.creator == myId then
@@ -1759,7 +1753,6 @@ function EventTriggerUI:getFilteredTriggers()
             table.insert(filtered, { trigger = dp, index = #all + i, _isDelivery = true, _dlvIndex = i })
         end
     end
-    dbg("getFilteredTriggers: filtered count=", #filtered)
     return filtered
 end
 
@@ -2115,10 +2108,8 @@ function EventTriggerUI:prerender()
     local divY = header.y + header.height + 2
     self:drawRect(8, divY, self:getWidth() - 30, 1, 0.7, 0.4, 0.4, 0.4)
 
-    local hx = 8
     for _, col in ipairs(headerCols) do
-        self:drawText(col.text, hx + 4, header.y + 1, 0.5, 0.5, 0.5, 1, UIFont.Small)
-        hx = hx + col.w
+        self:drawText(col.text, col.x + 4, header.y + 1, 0.5, 0.5, 0.5, 1, UIFont.Small)
     end
 
     local list = self:getFilteredTriggers()
