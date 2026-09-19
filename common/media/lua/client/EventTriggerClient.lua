@@ -749,6 +749,10 @@ function EventTrigger._removeMissingFromServer(serverTriggers)
     end
 end
 
+-- Forward declaration: GetMongooseChatPanel is defined later (MongooseChat integration section)
+-- OnServerCommand and ShowChatMessage reference it before its definition.
+local GetMongooseChatPanel
+
 -- Server command callback: syncAll → full list replacement (server JSON is authoritative)
 -- namedMessage → NAMED broadcast
 function EventTrigger.OnServerCommand(module, command, args)
@@ -841,7 +845,7 @@ function EventTrigger.OnServerCommand(module, command, args)
         end
     elseif command == "namedMessage" then
         -- NAMED mode server broadcast: show panel message on all clients
-        local mcPanel = GetMongooseChatPanel()
+        local mcPanel = type(GetMongooseChatPanel) == "function" and GetMongooseChatPanel() or nil
         if mcPanel and args then
             local cfg = EventTrigger.GetConfig()
             local author = args.outputName
@@ -855,12 +859,15 @@ function EventTrigger.OnServerCommand(module, command, args)
             })
         end
     elseif command == "deliveryResult" then
-        -- Delivery stub guarantees OnDeliveryResult exists, so no guard needed here.
+        -- Delivery stub guarantees OnDeliveryResult exists, but guard against whole-table replacement
         local player = getPlayer()
         if args and player then
             local success = (args.action == "completed")
             local msg = args.message or args.reason or ""
-            EventTrigger.Delivery.OnDeliveryResult(player, success, msg, args.rewardItems)
+            local fn = EventTrigger.Delivery and EventTrigger.Delivery.OnDeliveryResult
+            if type(fn) == "function" then
+                fn(player, success, msg, args.rewardItems)
+            end
         end
     end
 end
@@ -1033,7 +1040,7 @@ end
 -- Use pcall require for safe loading, avoid crash if MongooseChat is not installed
 -- ============================================================
 local _mcChatPanel = nil
-local function GetMongooseChatPanel()
+GetMongooseChatPanel = function()
     if _mcChatPanel ~= nil then return _mcChatPanel end
     local ok1, MC_ChatPanel = pcall(require, "MC_ChatPanel")
     if not ok1 or not MC_ChatPanel then
