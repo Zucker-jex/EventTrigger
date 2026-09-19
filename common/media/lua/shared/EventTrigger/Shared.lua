@@ -262,7 +262,6 @@ EventTriggerShared.makeDeliveryItem = function(args)
         displayName = tostring(args.displayName or ""),
         customName  = tostring(args.customName or ""),
         count       = math.max(1, args.count or 1),
-        collect     = args.collect ~= false,
     }
 end
 
@@ -322,20 +321,23 @@ EventTriggerShared.validateDeliveryItem = function(item)
     return true
 end
 
+-- 需求物品（requiredItems）一律仅作资格门槛，永不扣除。
+-- 需要消耗时请配置"消耗物品"（costOptions）。
+-- 旧数据中的 collect 字段被忽略；旧版 makeDeliveryItem 曾写入该字段，仅作向后兼容读取。
+
 -- 解析交付点的有效兑换方案（结合玩家选择）。
 -- 返回 costOptions（扣除列表）+ rewards，存在分支时优先使用分支。
 -- branchId：选中的分支（从 1 开始）；costOptionIndex：选中的消耗选项（从 1 开始，需求3）
 -- 解析交付点的有效兑换方案（结合玩家选择）。
 -- 返回 qualifyItems（需求物品/资格门槛）、costs（消耗扣除）、rewards、err。
---   qualifyItems：requiredItems — 玩家必须满足（按 matchMode）才能兑换。
---                 collect=true 的物品既是门槛又是消耗（旧版）；collect=false 仅作门槛检查。
---   costs：实际扣除的物品（旧版 = collect=true 的 requiredItems；分支 = 选中的消耗选项）。
+--   qualifyItems：requiredItems — 玩家必须满足（按 matchMode）才能兑换；**永不扣除**。
+--   costs：实际扣除的物品 = 消耗选项（costOptions / 选中分支）
 --   rewards：发放的物品。
 EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
     dp = dp or {}
     local branches = dp.branches or {}
 
-    -- 资格门槛：requiredItems（collect 仅决定是否额外扣除，不决定是否参与门槛）
+    -- 资格门槛：requiredItems（需求物品）—— 仅检查，不参与扣除
     local qualifyItems = {}
     for _, req in ipairs(dp.requiredItems or {}) do
         qualifyItems[#qualifyItems + 1] = {
@@ -343,24 +345,12 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
             displayName = tostring(req.displayName or ""),
             customName = tostring(req.customName or ""),
             count = math.max(1, req.count or 1),
-            collect = req.collect ~= false,
         }
     end
 
-    -- 旧版路径：无分支 → 消耗 = collect=true 的 requiredItems
+    -- 旧版路径：无分支且无消耗选项 → 不扣除任何物品（仅门槛 + 奖励）
     if #branches == 0 then
-        local costs = {}
-        for _, req in ipairs(dp.requiredItems or {}) do
-            if req.collect ~= false then
-                costs[#costs + 1] = {
-                    fullType = req.fullType,
-                    displayName = req.displayName,
-                    customName = req.customName or "",
-                    count = req.count,
-                }
-            end
-        end
-        return qualifyItems, costs, dp.rewardItems or {}, nil
+        return qualifyItems, {}, dp.rewardItems or {}, nil
     end
 
     -- 分支路径：选择指定分支（默认为 1）
@@ -372,19 +362,8 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
         return qualifyItems, nil, nil, "Branch unavailable"
     end
 
-    -- 分支内部：collect=true 的 requiredItems 会被消耗（"移除"型需求物品），
-    -- 再加上选中的消耗选项（需求3，可选）。
+    -- 分支内部：需求物品永不扣除，扣除仅来自选中的消耗选项（需求3，可选）
     local costs = {}
-    for _, req in ipairs(dp.requiredItems or {}) do
-        if req.collect ~= false then
-            costs[#costs + 1] = {
-                fullType = req.fullType,
-                displayName = req.displayName,
-                customName = req.customName or "",
-                count = req.count,
-            }
-        end
-    end
 
     local costOptions = branch.costOptions or {}
     local chosen

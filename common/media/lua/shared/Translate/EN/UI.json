@@ -150,7 +150,6 @@
     "UI_ET_Inv_Title": "Inventory",
     "UI_ET_Inv_Selected": "Selected",
     "UI_ET_Inv_Page": "Pg %1/%2",
-    "UI_ET_Inv_Collect": "Consume",
     "UI_ET_Inv_Quantity": "Quantity of %1",
     "UI_ET_Inv_ItemQuantity": "Item Quantity",
     "UI_ET_Inv_Add": "Add",
@@ -160,8 +159,6 @@
     "UI_ET_Inv_NoneSelected": "(none selected)",
     "UI_ET_Inv_None": "(none)",
     "UI_ET_Inv_NoItems": "(no items)",
-    "UI_ET_Dlv_CollectSuffix": " (consume)",
-    "UI_ET_Dlv_CheckOnlySuffix": " (check only)",
 
     "UI_ET_Hist_DeliveryNotFound": "Delivery point not found.",
     "UI_ET_Hist_TriggerNotFound": "Trigger not found.",

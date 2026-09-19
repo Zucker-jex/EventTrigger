@@ -563,28 +563,16 @@ Server.onClientCommand = function(module, command, player, args)
 
         local pid = getPlayerId(player)
         local cooldown = dp.cooldown or {}
-        local selectedORIndex = args.selectedORIndex
 
-        -- 解析有效的兑换方案（资格门槛 + 消耗 + 奖励）
+        -- 解析有效的兑换方案（资格门槛 + 消耗 + 奖励）。
+        -- 需求物品（requiredItems）仅作资格门槛、永不扣除，
+        -- 实际扣除仅来自"消耗物品"（costOptions），由 costIds（实例 ID）承载。
         local qualifyItems, costs, rewards, branchErr = Shared.resolveExchange(dp, args.branchId, args.costOptionIndex)
         if branchErr then
             sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
                 action = "failed", reason = branchErr,
             })
             return
-        end
-        -- 兼容旧版 ANY 模式：仅保留玩家选中的那一项消耗
-        if #(dp.branches or {}) == 0 and (dp.matchMode or "all") == "any" then
-            local targetIdx = selectedORIndex or 1
-            costs = {}
-            local idx = 0
-            for _, req in ipairs(dp.requiredItems or {}) do
-                idx = idx + 1
-                if idx == targetIdx and req.collect ~= false then
-                    costs[1] = { fullType = req.fullType, displayName = req.displayName, count = req.count }
-                    break
-                end
-            end
         end
 
         -- 批量次数 N：正整数，默认 1，上限 20 防刷
@@ -653,33 +641,16 @@ Server.onClientCommand = function(module, command, player, args)
                 end
             end
         end
-        -- 判定物品是否被改名（语言无关）。
-        -- 1) isCustomName() 为 true → 已改名（需调用方配对 setCustomName(true)）
-        -- 2) 兜底：显示名 ≠ 脚本默认显示名 → 已改名（两端各自语言环境内自洽）
-        local function isItemRenamed(it)
-            if not it then return false end
-            local ok2, v = pcall(function() return it:isCustomName() end)
-            if ok2 and type(v) == "boolean" and v then return true end
-            local ok3, scriptItem = pcall(function() return it:getScriptItem() end)
-            if ok3 and scriptItem then
-                local ok4, defaultName = pcall(function() return scriptItem:getDisplayName() end)
-                if ok4 and type(defaultName) == "string" and #defaultName > 0 then
-                    return it:getDisplayName() ~= defaultName
-                end
-            end
-            return false
-        end
-        -- 判断背包物品是否匹配目标消耗项：
-        --   customName 非空 → 要求"改名物品"，比自定义名（玩家输入字符串，不翻译，跨语言安全）
-        --   customName 为空 → 要求"普通物品"，排除已改名的实例
+        -- 服务端只做「宽松校验」：仅比对 fullType。
+        -- 原因：精确匹配需要比对 displayName/customName，而服务端的语言环境可能与
+        -- 配置者不同（getDisplayName() 是运行时翻译名），比名字会误判并错误拒绝；
+        -- 重命名物品的 customName 也属于客户端本地语义。
+        -- 因此「是否满足门槛 / 扣哪一件」由客户端判定（它拥有所见即所得的上下文，
+        -- 并把选定的实例 ID 发给服务端），服务端退化为兜底：只拦截"完全没有该物品"。
+        -- 真正扣除按 costIds 执行，故宽松校验不影响正确性。
         local function matchesCost(it, cost)
             if not it then return false end
-            if it:getFullType() ~= cost.fullType then return false end
-            local want = cost.customName or ""
-            if #want > 0 then
-                return it:getDisplayName() == want
-            end
-            return not isItemRenamed(it)
+            return it:getFullType() == cost.fullType
         end
         -- 统计背包中匹配指定消耗项的物品数量（含嵌套背包）
         local function countOwned(cost)
@@ -703,15 +674,14 @@ Server.onClientCommand = function(module, command, player, args)
         end
 
         -- 资格门槛校验：requiredItems 未满足则拒绝兑换
+        -- 需求物品永不扣除，仅检查持有，因此不按 batchCount 放大。
         if #qualifyItems > 0 then
             local matchMode = dp.matchMode or "all"
             if matchMode == "any" then
                 -- ANY 模式：任一资格物品满足即可
                 local hasQualify = false
                 for _, q in ipairs(qualifyItems) do
-                    -- collect=false 表示不消耗，仅作为资格门槛
-                    local need = q.collect and (q.count * batchCount) or q.count
-                    if countOwned(q) >= need then
+                    if countOwned(q) >= q.count then
                         hasQualify = true
                         break
                     end
@@ -725,8 +695,7 @@ Server.onClientCommand = function(module, command, player, args)
             else
                 -- ALL 模式：所有资格物品均需满足
                 for _, q in ipairs(qualifyItems) do
-                    local need = q.collect and (q.count * batchCount) or q.count
-                    if countOwned(q) < need then
+                    if countOwned(q) < q.count then
                         sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
                             action = "failed", reason = "Missing required items in backpack!",
                         })

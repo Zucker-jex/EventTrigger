@@ -69,8 +69,12 @@ local function isItemRenamed(item)
 end
 
 -- 物品是否匹配配置条目：
---   customName 非空 → 要求"改名物品"，精确比自定义名（语言无关，可区分同 fullType 的多把实例）
---   customName 为空 → 要求"普通物品"，按 fullType 匹配（避开翻译名跨语言的差异）
+--   customName 非空 → 要求"改名物品"，精确比自定义名（玩家输入文本，不翻译 → 跨语言安全）
+--   customName 为空 → 只比 fullType（宽松）
+-- 说明：这里刻意不对"空 customName"做"必须未改名"的判定 —— 该判定依赖
+-- item:getDisplayName() 与脚本名的语言一致性，客户端/服务端语言环境不同会导致
+-- 误拒（服务端报 Missing required items）。扣哪个实例由客户端选定的 ID 决定，
+-- 因此宽松匹配不会扣错。
 local function matchesItem(item, cfg)
     if not item or not cfg then return false end
     if item:getFullType() ~= cfg.fullType then return false end
@@ -78,8 +82,13 @@ local function matchesItem(item, cfg)
     if #want > 0 then
         return item:getDisplayName() == want
     end
-    return not isItemRenamed(item)
+    return true
 end
+
+-- 需求物品（requiredItems）一律仅作资格门槛，永不扣除。
+-- 需要消耗时请配置"消耗物品"（costOptions / 分支）。
+-- 因此配置界面的"移除"勾选框已整体取消，存储的 collect 字段被忽略
+-- （旧数据可能仍带该字段，不影响行为）。
 
 -- ============================================================
 -- 深度遍历容器中所有物品（含嵌套背包），对每个物品调用 fn
@@ -170,66 +179,10 @@ function EventTrigger.Delivery.CountItems(inventory, requiredItems)
 end
 
 -- ============================================================
--- 从背包中移除物品（先收集再移除 — 对 MP ArrayList 安全）
--- 仅移除 req.collect ~= false 的物品
--- matchMode："all" = 移除所有匹配项，"any" = 仅移除选中的匹配项
--- selectedORIndex：OR 模式下选中需求项的索引（1-based）
--- multiplier：批次数（每项扣除 count * multiplier）
+-- （旧）从背包中移除需求物品 —— 已彻底废弃并删除。
+-- 现规则：需求物品永不扣除；扣款仅来自"消耗物品"，由客户端选定实例 ID、
+-- 服务端按 ID 扣除（见 ResolveCostInstances / FinalizeDelivery）。
 -- ============================================================
-function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, selectedORIndex, multiplier)
-    local removedData = {}
-    local items = inventory:getItems()
-    matchMode = matchMode or "all"
-    multiplier = multiplier or 1
-
-    -- 阶段 1：收集物品引用（迭代期间不修改 ArrayList）
-    local toRemoveList = {}
-    
-    if matchMode == "any" then
-        -- OR 模式：仅从选中的需求项中移除
-        local targetIdx = selectedORIndex or 1
-        for idx, req in ipairs(requiredItems) do
-            if req.collect ~= false and idx == targetIdx then
-                local remaining = req.count * multiplier
-                for i = items:size() - 1, 0, -1 do
-                    if remaining <= 0 then break end
-                    local item = items:get(i)
-                    if matchesItem(item, req) then
-                        toRemoveList[#toRemoveList + 1] = item
-                        remaining = remaining - 1
-                    end
-                end
-                break
-            end
-        end
-    else
-        -- AND 模式：从所有需求项中收集
-        for _, req in ipairs(requiredItems) do
-            if req.collect ~= false then
-                local remaining = req.count * multiplier
-                for i = items:size() - 1, 0, -1 do
-                    if remaining <= 0 then break end
-                    local item = items:get(i)
-                    if matchesItem(item, req) then
-                        toRemoveList[#toRemoveList + 1] = item
-                        remaining = remaining - 1
-                    end
-                end
-            end
-        end
-    end
-
-    -- 阶段 2：安全移除（已收集引用，无迭代冲突）
-    for _, item in ipairs(toRemoveList) do
-        table.insert(removedData, {
-            fullType = item:getFullType(),
-            displayName = item:getDisplayName(),
-        })
-        inventory:Remove(item)
-    end
-
-    return removedData
-end
 
 -- ============================================================
 -- 发放奖励物品，返回是否成功。失败时全部回滚。
@@ -277,14 +230,13 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
     if batchCount < 1 then batchCount = 1 end
     batchCount = math.floor(batchCount)
 
-    -- 资格门槛检查（需求物品）：collect=true 按 batch 计，collect=false 只查持有
+    -- 资格门槛检查（需求物品）：仅检查是否持有，永不扣除，故不按 batch 放大
     if #qualifyItems > 0 then
         local qualCounts = EventTrigger.Delivery.CountItems(inventory, qualifyItems)
         if matchMode == "any" then
             local hasAny = false
             for _, q in ipairs(qualifyItems) do
-                local need = q.collect and (q.count * batchCount) or q.count
-                if (qualCounts[itemKey(q.fullType, q.customName)] or 0) >= need then
+                if (qualCounts[itemKey(q.fullType, q.customName)] or 0) >= (q.count or 1) then
                     hasAny = true
                     break
                 end
@@ -292,8 +244,7 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
             if not hasAny then return false, getText("UI_ET_Msg_MissingItems") end
         else
             for _, q in ipairs(qualifyItems) do
-                local need = q.collect and (q.count * batchCount) or q.count
-                if (qualCounts[itemKey(q.fullType, q.customName)] or 0) < need then
+                if (qualCounts[itemKey(q.fullType, q.customName)] or 0) < (q.count or 1) then
                     return false, getText("UI_ET_Msg_MissingItems")
                 end
             end
@@ -558,8 +509,8 @@ function EventTriggerDeliveryPrompt:prerender()
         end
         for _, req in ipairs(reqItems) do
             local have = counts[itemKey(req.fullType, req.customName)] or 0
-            local suffix = (req.collect ~= false) and getText("UI_ET_Dlv_CollectSuffix") or getText("UI_ET_Dlv_CheckOnlySuffix")
-            local txt = fitText((req.displayName or "?") .. "  x" .. tostring(req.count) .. suffix .. "  [" .. getText("UI_ET_Batch_Have") .. " " .. have .. "]", UIFont.Small, self.width - 48)
+            -- 需求物品仅作门槛（不扣除），因此不再标注"移除 / 仅检查"
+            local txt = fitText((req.displayName or "?") .. "  x" .. tostring(req.count) .. "  [" .. getText("UI_ET_Batch_Have") .. " " .. have .. "]", UIFont.Small, self.width - 48)
             self:drawText(txt, 24, y, 1, 1, 1, 1, UIFont.Small)
             y = y + math.floor(20 * EventTrigger.US)
         end
@@ -601,13 +552,13 @@ end
 
 -- 解析交付的显示/执行方案（分支感知）。
 -- 返回 qualifyItems（需求物品/资格门槛）+ costItems（消耗）+ rewardItems + 有效 matchMode。
---   qualifyItems：requiredItems — 资格门槛（collect=true 在旧版中同时消耗）。
---   costItems：实际扣除的物品（旧版 = collect=true 的 requiredItems；分支 = 选中的消耗选项）。
---   branch：单项选中的消耗物品 + 分支奖励 + "all"（已做过选择）。
+--   qualifyItems：requiredItems — 纯资格门槛，**永不扣除**（无论 all / any）。
+--   costItems：实际扣除的物品 = 消耗物品（costOptions / 分支选中的那一个）。
+--   branch：单项选中的消耗物品 + 分支奖励 + 交付点自身的 matchMode。
 function EventTrigger.Delivery.resolveView(delivery)
     local branches = delivery.branches or {}
 
-    -- 资格门槛：requiredItems（需求物品）
+    -- 资格门槛：requiredItems（需求物品）—— 仅检查持有，不参与扣除
     local qualifyItems = {}
     for _, req in ipairs(delivery.requiredItems or {}) do
         qualifyItems[#qualifyItems + 1] = {
@@ -615,25 +566,12 @@ function EventTrigger.Delivery.resolveView(delivery)
             displayName = req.displayName,
             customName = req.customName or "",
             count = req.count,
-            collect = req.collect ~= false,
         }
     end
 
-    -- 旧版路径：消耗 = requiredItems 中 collect=true 的
+    -- 旧版路径（无分支）：需求物品不扣，只有显式的"消耗选项"才扣（旧版无该字段 → 不扣）
     if #branches == 0 then
-        local costItems = {}
-        for _, req in ipairs(delivery.requiredItems or {}) do
-            if req.collect ~= false then
-                costItems[#costItems + 1] = {
-                    fullType = req.fullType,
-                    displayName = req.displayName,
-                    customName = req.customName or "",
-                    count = req.count,
-                    collect = true,
-                }
-            end
-        end
-        return qualifyItems, costItems, (delivery.rewardItems or {}), (delivery.matchMode or "all")
+        return qualifyItems, {}, (delivery.rewardItems or {}), (delivery.matchMode or "all")
     end
 
     -- 分支路径
@@ -643,24 +581,11 @@ function EventTrigger.Delivery.resolveView(delivery)
         branch = branches[bid]
     end
     if not branch or branch.enabled == false then
-        return qualifyItems, {}, {}, "all"
+        return qualifyItems, {}, {}, (delivery.matchMode or "all")
     end
 
-    -- 消耗 = requiredItems 中 collect=true 的（"移除"型需求物品）
+    -- 扣除 = branch 选中的 costOption（需求3，可选）
     local costItems = {}
-    for _, req in ipairs(delivery.requiredItems or {}) do
-        if req.collect ~= false then
-            costItems[#costItems + 1] = {
-                fullType = req.fullType,
-                displayName = req.displayName,
-                customName = req.customName or "",
-                count = req.count,
-                collect = true,
-            }
-        end
-    end
-
-    -- 额外消耗：branch 选中的 costOption（需求3，可选）
     local costOptions = branch.costOptions or {}
     local chosen
     local chosenIdx = delivery._selectedCostOptionIndex
@@ -675,20 +600,18 @@ function EventTrigger.Delivery.resolveView(delivery)
             displayName = chosen.displayName,
             customName = chosen.customName or "",
             count = chosen.count,
-            collect = true,
         }
     end
-    return qualifyItems, costItems, (branch.rewards or {}), "all"
+    return qualifyItems, costItems, (branch.rewards or {}), (delivery.matchMode or "all")
 end
 
--- 清除单次交付的临时选择状态（分支 / 消耗选项 / OR 索引）。
+-- 清除单次交付的临时选择状态（分支 / 消耗选项）。
 -- 这些仅运行时使用；残留值会让下次触发跳过选择对话框，
 -- 导致玩家可见行为不一致。
 function EventTrigger.Delivery.ClearSelection(delivery)
     if not delivery then return end
     delivery._selectedBranchId = nil
     delivery._selectedCostOptionIndex = nil
-    delivery._selectedORItemIndex = nil
 end
 
 function EventTrigger.Delivery.ShowDeliveryConfirm(player, delivery)
@@ -730,17 +653,9 @@ function EventTrigger.Delivery.ShowDeliveryConfirm(player, delivery)
         end
     end
 
-    -- 旧版 ANY 模式且多个可收集项 → 选择物品
-    if #branches == 0 and (delivery.matchMode or "all") == "any" then
-        local collectCount = 0
-        for _, req in ipairs(delivery.requiredItems or {}) do
-            if req.collect ~= false then collectCount = collectCount + 1 end
-        end
-        if collectCount > 1 then
-            EventTrigger.Delivery.ShowItemSelectForOR(player, delivery)
-            return
-        end
-    end
+    -- 注：旧版 ANY 模式曾在兑换前弹窗让玩家"选择扣除哪一项"。
+    -- 现在 ANY 模式的需求物品仅作资格门槛、永不扣除，该弹窗已废弃。
+    -- （EventTriggerDeliveryItemSelectOR / ShowItemSelectForOR 保留定义但不再被调用。）
 
     local ui = EventTriggerDeliveryConfirm:new(player, delivery)
     ui:initialise()
@@ -802,24 +717,8 @@ function EventTrigger.Delivery.FinalizeDelivery(player, delivery, batchCount)
     EventTrigger.Delivery._activePrompt[playerKey] = nil
     EventTrigger.Delivery._pendingDpId[playerKey] = nil
 
-    -- 仅旧版 ANY 模式需要确定 selectedORIndex。
-    -- 分支模式在 resolveView() 内部已解析出单一消耗物品，此时推导
-    -- OR 索引会与单元素消耗列表失同步，可能导致"未扣除物品却发放奖励"。
-    local branches = delivery.branches or {}
-    local matchMode = delivery.matchMode or "all"
-    local selectedORIndex = nil
-    if #branches == 0 and matchMode == "any" then
-        selectedORIndex = delivery._selectedORItemIndex
-        if not selectedORIndex then
-            for idx, req in ipairs(delivery.requiredItems or {}) do
-                if req.collect ~= false then
-                    selectedORIndex = idx
-                    break
-                end
-            end
-        end
-    end
-
+    -- ANY 模式的需求物品不再扣除（仅作资格门槛），故无需再推导 selectedORIndex；
+    -- 具体扣除的实例由 costIds（客户端选定的实例 ID 列表）承载。
     delivery._batchCount = batchCount
 
     local ok, msg, costIds = EventTrigger.Delivery.Validate(player, delivery)
@@ -828,7 +727,6 @@ function EventTrigger.Delivery.FinalizeDelivery(player, delivery, batchCount)
         return
     end
     local args = { id = delivery.id, batchCount = batchCount }
-    if selectedORIndex then args.selectedORIndex = selectedORIndex end
     if delivery._selectedBranchId then args.branchId = delivery._selectedBranchId end
     if delivery._selectedCostOptionIndex then args.costOptionIndex = delivery._selectedCostOptionIndex end
     -- 客户端已选定要扣除的具体物品实例，服务器按 ID 扣除
@@ -964,13 +862,8 @@ function EventTriggerDeliveryConfirm:prerender()
             self:drawText(getText("UI_ET_Inv_None"), cx + 8, cy, 0.5, 0.5, 0.5, 1, UIFont.Small)
         else
             for _, it in ipairs(col.items) do
-                local txt
-                if col.isQualify then
-                    local suffix = (it.collect ~= false) and getText("UI_ET_Dlv_CollectSuffix") or getText("UI_ET_Dlv_CheckOnlySuffix")
-                    txt = fitText((it.displayName or "?") .. "  x" .. tostring(it.count) .. suffix, UIFont.Small, colW - 20)
-                else
-                    txt = fitText((it.displayName or "?") .. "  x" .. tostring(it.count), UIFont.Small, colW - 20)
-                end
+                -- 需求物品列无后缀；消耗/奖励列同样只显示名称与数量
+                local txt = fitText((it.displayName or "?") .. "  x" .. tostring(it.count), UIFont.Small, colW - 20)
                 self:drawText(txt, cx + 8, cy, 1, 1, 1, 1, UIFont.Small)
                 cy = cy + rowH
                 if cy > self.height - 70 then break end
@@ -1042,6 +935,8 @@ function EventTriggerBatchCountPrompt:computeCosts()
         }
     end
     if self.maxN == nil or self.maxN < 1 then self.maxN = 1 end
+    -- 单次批量上限 20（与服务端保持一致，避免"填了 30 实际只执行 20"的静默偏差）
+    if self.maxN > 20 then self.maxN = 20 end
     self.entryValue = 1
 end
 
@@ -1277,14 +1172,7 @@ function EventTriggerBranchSelectPrompt:create()
             self.costOptions[#self.costOptions + 1] = co
         end
     end
-    if #self.costOptions == 0 then
-        -- 回退：旧版需求物品
-        for _, req in ipairs(self.delivery.requiredItems or {}) do
-            if req.collect ~= false then
-                self.costOptions[#self.costOptions + 1] = req
-            end
-        end
-    end
+    -- 注：需求物品永不扣除，因此不再回退到 requiredItems；无消耗选项即为纯门槛兑换。
 
     self.costHeaderY = 28 + math.floor(18 * s)
     self.costItemsY = self.costHeaderY + self.rowH
@@ -1680,7 +1568,9 @@ function EventTriggerCostOptionSelectPrompt:new(player, delivery)
 end
 
 -- ============================================================
--- OR 模式物品选择 UI（选择使用哪个物品）
+-- OR 模式物品选择 UI（选择使用哪个物品）—— 死代码（无调用点）
+-- 需求物品现已统一为"仅作门槛、永不扣除"，因此不再存在"选择扣除哪一项"的流程。
+-- 保留定义仅为兼容外部引用；如无需要可直接删除整块。
 -- ============================================================
 EventTrigger.Delivery._itemSelectUI = nil
 
@@ -1718,6 +1608,9 @@ function EventTriggerDeliveryItemSelectOR:create()
     self.radioSize = 18
     self.selectedItemIndex = nil
 
+    -- 死代码：需求物品永不扣除，deductItems 已无实际用途（保留原构造以供参考）
+    self.deductItems = {}
+
     -- 底部按钮（按真实宽度居中，永不重叠）
     local bh = 34
     local gap = 24
@@ -1751,19 +1644,18 @@ function EventTriggerDeliveryItemSelectOR:findMatchingItems()
     local inv = player:getInventory()
     if not inv then return end
     local items = inv:getItems()
-    
-    for _, req in ipairs(self.delivery.requiredItems or {}) do
-        if req.collect ~= false then
-            for i = 0, items:size() - 1 do
-                local item = items:get(i)
-                if item and matchesItem(item, req) then
-                    table.insert(self.matchingItems, {
-                        req = req,
-                        item = item,
-                        fullType = item:getFullType(),
-                        displayName = item:getDisplayName(),
-                    })
-                end
+
+    for _, entry in ipairs(self.deductItems or {}) do
+        local req = entry.req
+        for i = 0, items:size() - 1 do
+            local item = items:get(i)
+            if item and matchesItem(item, req) then
+                table.insert(self.matchingItems, {
+                    req = req,
+                    item = item,
+                    fullType = item:getFullType(),
+                    displayName = item:getDisplayName(),
+                })
             end
         end
     end
@@ -1783,8 +1675,13 @@ function EventTriggerDeliveryItemSelectOR:onConfirm()
     end
     self:close()
     
+    -- 将"列表内索引"映射回 requiredItems 的原始索引
+    --（resolveView / FinalizeDelivery / 服务端均以原始索引定位）
+    local entry = self.deductItems and self.deductItems[self.selectedItemIndex]
+    local reqIdx = entry and entry.idx or self.selectedItemIndex
+
     -- 保存选中的物品索引（供 OR 语义解析使用）
-    self.delivery._selectedORItemIndex = self.selectedItemIndex
+    self.delivery._selectedORItemIndex = reqIdx
     self.delivery._batchCount = 1
 
     local ok, msg, costIds = EventTrigger.Delivery.Validate(player, self.delivery)
@@ -1792,7 +1689,7 @@ function EventTriggerDeliveryItemSelectOR:onConfirm()
         HaloTextHelper.addBadText(player, msg)
         return
     end
-    local args = { id = self.delivery.id, selectedORIndex = self.selectedItemIndex }
+    local args = { id = self.delivery.id, selectedORIndex = reqIdx }
     if costIds and #costIds > 0 then args.costIds = costIds end
     sendClientCommand("EventTrigger", "confirmDelivery", args)
 end
@@ -1853,11 +1750,12 @@ function EventTriggerDeliveryItemSelectOR:prerender()
         self:drawText(cdText, self.leftX, self.infoY + 20, 0.7, 0.9, 0.7, 1, UIFont.Small)
     end
 
-    local reqItems = delivery.requiredItems or {}
+    local reqItems = self.deductItems or {}
     if #reqItems == 0 then
         self:drawText(getText("UI_ET_Inv_NoItems"), self.leftX, self.listStartY + 4, 0.5, 0.5, 0.5, 1, UIFont.Small)
     else
-        for idx, req in ipairs(reqItems) do
+        for idx, entry in ipairs(reqItems) do
+            local req = entry.req
             local iy = self.listStartY + (idx - 1) * self.rowH
 
             local hasItem = false
@@ -1915,8 +1813,9 @@ function EventTriggerDeliveryItemSelectOR:onMouseDown(x, y)
     end
 
     -- 点击左列中的某一行选中它（与 prerender 行布局对应）
-    local reqItems = self.delivery.requiredItems or {}
-    for idx = 1, #reqItems do
+    -- 死代码：deductItems 恒为空，此分支已不可达
+    local deductItems = self.deductItems or {}
+    for idx = 1, #deductItems do
         local iy = self.listStartY + (idx - 1) * self.rowH
         if x >= self.leftX and x <= self.leftX + self.colW and y >= iy and y < iy + self.rowH then
             self.selectedItemIndex = idx
@@ -2438,7 +2337,6 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
         local r = i - startIdx
         local y = rowStartY + r * self.rowH
         local itemIdx = i + 1
-        local isRequired = (mode == "required")
 
         -- 顶行：物品名 x 数量（左）+ 数量/移除 按钮（右）
         local textW = self.rightW - 156
@@ -2464,34 +2362,14 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
         local delBtn = makeRightBtn(getText("UI_ET_Inv_Remove"), EventTriggerDeliveryItemSelect.onDelItem, rightEdge)
         makeRightBtn(getText("UI_ET_Inv_Qty"), EventTriggerDeliveryItemSelect.onEditQty, delBtn.x - gap)
 
-        -- 底行：FullType（左）+ Collect 复选框（右，仅 required）
-        local ftW = isRequired and (self.rightW - 120) or (self.rightW - 20)
+        -- 底行：FullType
+        -- 需求物品仅作资格门槛、永不扣除，因此不再有"移除"勾选框。
+        local ftW = self.rightW - 20
         local ft = fitText("[" .. (si.fullType or "?") .. "]", UIFont.Small, ftW)
         local ftLbl = ISLabel:new(x + 4, y + 24, 18, ft, 0.45, 0.5, 0.65, 1, UIFont.Small, true)
         ftLbl:initialise()
         self:addChild(ftLbl)
         table.insert(self.selectedChildren, ftLbl)
-
-        if isRequired then
-            local collect = si.collect ~= false
-            local collectLabel = getText("UI_ET_Inv_Collect")
-            local collectW = getTextManager():MeasureStringX(UIFont.Small, collectLabel)
-            local cbX = x + self.rightW - collectW - 26
-            local cbY = y + 26
-            local collectCB = ISTickBox:new(cbX, cbY, 18, 18, "", self, function()
-                EventTriggerDeliveryItemSelect.onToggleCollect(self, itemIdx)
-            end)
-            collectCB:initialise()
-            collectCB:addOption("")
-            collectCB.selected[1] = collect
-            self:addChild(collectCB)
-            table.insert(self.selectedChildren, collectCB)
-
-            local collectLbl = ISLabel:new(cbX + 22, cbY, 18, collectLabel, 0.7, 0.9, 0.7, 1, UIFont.Small, true)
-            collectLbl:initialise()
-            self:addChild(collectLbl)
-            table.insert(self.selectedChildren, collectLbl)
-        end
     end
 end
 
@@ -2535,7 +2413,7 @@ function EventTriggerDeliveryItemSelect:onAddItem(btn)
         displayName = btn.itemDisplayName,
         customName = btn.itemCustomName or "",
         count = 1,
-        collect = true,
+        -- 需求物品仅作门槛，不再写入 collect（旧数据中的该字段被忽略）
     })
 
     self:refreshUI()
@@ -2594,19 +2472,8 @@ function EventTriggerDeliveryItemSelect:onDelItem(btn)
     self:refreshUI()
 end
 
--- 切换需求物品的 collect 复选框
-function EventTriggerDeliveryItemSelect:onToggleCollect(idx)
-    local p = EventTrigger.Delivery._setupPending
-    if not p then return end
-    local mode = EventTrigger.Delivery._selectionMode or "required"
-    if mode ~= "required" then return end
-
-    local itemList = p.requiredItems
-    if idx and idx >= 1 and idx <= #itemList then
-        itemList[idx].collect = not (itemList[idx].collect ~= false)
-        self:refreshUI()
-    end
-end
+-- （旧）切换需求物品的 collect 复选框 —— 已删除。
+-- 需求物品统一为"仅作门槛、永不扣除"，不再有勾选框。
 
 function EventTriggerDeliveryItemSelect:onDone()
     local p = EventTrigger.Delivery._setupPending
@@ -2788,17 +2655,8 @@ function EventTrigger.Delivery.PlacePending()
             }
         end
         if #costOptions == 0 then
-            -- 需求2 回退：共享消耗从 requiredItems（collect=true）推导
-            for _, r in ipairs(p.requiredItems or {}) do
-                if r.collect ~= false then
-                    costOptions[#costOptions + 1] = {
-                        fullType = r.fullType,
-                        displayName = r.displayName,
-                        customName = r.customName or "",
-                        count = r.count,
-                    }
-                end
-            end
+            -- 需求物品永不扣除，因此不再从 requiredItems 推导共享消耗；
+            -- 未显式配置消耗选项时即为纯门槛兑换（branches 各自只带奖励）。
         end
         for i = 1, branchCount do
             local rewards
@@ -3014,7 +2872,6 @@ function EventTrigger.Delivery._cloneItems(items)
             displayName = item.displayName,
             customName = item.customName or "",
             count = item.count,
-            collect = item.collect ~= false,
         }
     end
     return out
@@ -3092,8 +2949,8 @@ function EventTriggerDeliveryHistUI:create()
         y = y + rowH
     else
         for _, item in ipairs(reqItems) do
-            local collectStr = (item.collect ~= false) and getText("UI_ET_Dlv_CollectSuffix") or getText("UI_ET_Dlv_CheckOnlySuffix")
-            local txt = fitText(item.displayName .. " x" .. tostring(item.count) .. collectStr .. "  [" .. item.fullType .. "]", F, maxW - 20)
+            -- 需求物品仅作门槛（不扣除），不再标注"移除 / 仅检查"
+            local txt = fitText(item.displayName .. " x" .. tostring(item.count) .. "  [" .. item.fullType .. "]", F, maxW - 20)
             self.lines[#self.lines + 1] = { x = x + 8, y = y, text = txt, color = {1,1,1} }
             y = y + rowH
         end

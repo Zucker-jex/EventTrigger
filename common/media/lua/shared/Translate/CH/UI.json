@@ -150,7 +150,6 @@
     "UI_ET_Inv_Title": "背包",
     "UI_ET_Inv_Selected": "已选",
     "UI_ET_Inv_Page": "第 %1/%2 页",
-    "UI_ET_Inv_Collect": "移除",
     "UI_ET_Inv_Quantity": "%1 的数量",
     "UI_ET_Inv_ItemQuantity": "物品数量",
     "UI_ET_Inv_Add": "添加",
@@ -160,8 +159,6 @@
     "UI_ET_Inv_NoneSelected": "（未选择）",
     "UI_ET_Inv_None": "（无）",
     "UI_ET_Inv_NoItems": "（无物品）",
-    "UI_ET_Dlv_CollectSuffix": "（移除）",
-    "UI_ET_Dlv_CheckOnlySuffix": "（仅检查）",
 
     "UI_ET_Hist_DeliveryNotFound": "配送点未找到。",
     "UI_ET_Hist_TriggerNotFound": "触发器未找到。",
