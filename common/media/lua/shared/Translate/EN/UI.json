@@ -86,6 +86,15 @@
     "UI_ET_Btn_No": "No",
     "UI_ET_Btn_Confirm": "Confirm",
     "UI_ET_Btn_DoneNext": "Done / Next",
+    "UI_ET_Btn_Batch": "Batch",
+
+    "UI_ET_Batch_Title": "Batch Exchange",
+    "UI_ET_Batch_Cost": "Cost (per exchange):",
+    "UI_ET_Batch_Reward": "Reward (per exchange):",
+    "UI_ET_Batch_Have": "Owned",
+    "UI_ET_Batch_Count": "Times (N):",
+    "UI_ET_Batch_PreviewCost": "Total cost: %1",
+    "UI_ET_Batch_PreviewReward": "Total reward: %1",
 
     "UI_ET_Dlv_Point": "Delivery Point",
     "UI_ET_Dlv_Hint": "Delivery hint text (shown above player head)",

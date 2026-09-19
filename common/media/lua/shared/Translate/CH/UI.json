@@ -86,6 +86,15 @@
     "UI_ET_Btn_No": "否",
     "UI_ET_Btn_Confirm": "确认",
     "UI_ET_Btn_DoneNext": "完成 / 下一步",
+    "UI_ET_Btn_Batch": "批量兑换",
+
+    "UI_ET_Batch_Title": "批量兑换",
+    "UI_ET_Batch_Cost": "单次消耗：",
+    "UI_ET_Batch_Reward": "单次奖励：",
+    "UI_ET_Batch_Have": "持有",
+    "UI_ET_Batch_Count": "兑换次数 (N)：",
+    "UI_ET_Batch_PreviewCost": "总消耗：%1",
+    "UI_ET_Batch_PreviewReward": "总奖励：%1",
 
     "UI_ET_Dlv_Point": "配送点",
     "UI_ET_Dlv_Hint": "配送提示文字（显示在玩家头顶）",

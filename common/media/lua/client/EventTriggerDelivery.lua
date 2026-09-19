@@ -54,11 +54,13 @@ end
 -- Only removes items where req.collect ~= false
 -- matchMode: "all" = remove all matching items, "any" = remove only selected matching item
 -- selectedORIndex: index of selected required item in OR mode (1-based)
+-- multiplier: batch count (each item deducted count * multiplier)
 -- ============================================================
-function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, selectedORIndex)
+function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, selectedORIndex, multiplier)
     local removedData = {}
     local items = inventory:getItems()
     matchMode = matchMode or "all"
+    multiplier = multiplier or 1
 
     -- Phase 1: collect item references (no ArrayList modification during iteration)
     local toRemoveList = {}
@@ -68,7 +70,7 @@ function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, 
         local targetIdx = selectedORIndex or 1
         for idx, req in ipairs(requiredItems) do
             if req.collect ~= false and idx == targetIdx then
-                local remaining = req.count
+                local remaining = req.count * multiplier
                 for i = items:size() - 1, 0, -1 do
                     if remaining <= 0 then break end
                     local item = items:get(i)
@@ -84,7 +86,7 @@ function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, 
         -- AND mode: collect from all required items
         for _, req in ipairs(requiredItems) do
             if req.collect ~= false then
-                local remaining = req.count
+                local remaining = req.count * multiplier
                 for i = items:size() - 1, 0, -1 do
                     if remaining <= 0 then break end
                     local item = items:get(i)
@@ -112,11 +114,13 @@ end
 -- ============================================================
 -- Grant reward items, return success. On failure, rollback all.
 -- Uses inventory:AddItem(fullTypeString) pattern from bak.
+-- multiplier: batch count (each reward granted count * multiplier)
 -- ============================================================
-function EventTrigger.Delivery.GrantRewards(inventory, rewardItems)
+function EventTrigger.Delivery.GrantRewards(inventory, rewardItems, multiplier)
+    multiplier = multiplier or 1
     local created = {}
     for _, reward in ipairs(rewardItems) do
-        for _ = 1, reward.count do
+        for _ = 1, reward.count * multiplier do
             local instance = inventory:AddItem(reward.fullType)
             if instance then
                 if reward.displayName and #reward.displayName > 0 then
@@ -145,16 +149,19 @@ function EventTrigger.Delivery.Execute(player, deliveryData)
     local rewardItems = deliveryData.rewardItems or {}
     local matchMode = deliveryData.matchMode or "all"
     local selectedORIndex = deliveryData._selectedORItemIndex
+    local batchCount = tonumber(deliveryData._batchCount) or 1
+    if batchCount < 1 then batchCount = 1 end
+    batchCount = math.floor(batchCount)
 
     -- Pre-check counts (FullType + DisplayName dual-match)
     local counts = EventTrigger.Delivery.CountItems(inventory, requiredItems)
     
     if matchMode == "any" then
-        -- OR logic: player needs at least ONE of the required items
+        -- OR logic: player needs at least ONE of the required items (x batch)
         local hasAny = false
         for _, req in ipairs(requiredItems) do
             local key = req.fullType .. "|" .. req.displayName
-            if (counts[key] or 0) >= req.count then
+            if (counts[key] or 0) >= req.count * batchCount then
                 hasAny = true
                 break
             end
@@ -163,10 +170,10 @@ function EventTrigger.Delivery.Execute(player, deliveryData)
             return false, getText("UI_ET_Msg_MissingItems")
         end
     else
-        -- AND logic (default): player needs ALL required items
+        -- AND logic (default): player needs ALL required items (x batch)
         for _, req in ipairs(requiredItems) do
             local key = req.fullType .. "|" .. req.displayName
-            if (counts[key] or 0) < req.count then
+            if (counts[key] or 0) < req.count * batchCount then
                 return false, getText("UI_ET_Msg_MissingItems")
             end
         end
@@ -178,11 +185,11 @@ function EventTrigger.Delivery.Execute(player, deliveryData)
         return false, cooldownMsg
     end
 
-    -- Remove required items (only for items that match in OR mode, or all in AND mode)
-    local removedData = EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, selectedORIndex)
+    -- Remove required items (batch)
+    local removedData = EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, selectedORIndex, batchCount)
 
-    -- Grant rewards (with rollback on failure)
-    local granted = EventTrigger.Delivery.GrantRewards(inventory, rewardItems)
+    -- Grant rewards (batch, with rollback on failure)
+    local granted = EventTrigger.Delivery.GrantRewards(inventory, rewardItems, batchCount)
     if not granted then
         -- Rollback removed items
         for _, data in ipairs(removedData) do
@@ -205,14 +212,17 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
     local inventory = player:getInventory()
     local requiredItems = deliveryData.requiredItems or {}
     local matchMode = deliveryData.matchMode or "all"
+    local batchCount = tonumber(deliveryData._batchCount) or 1
+    if batchCount < 1 then batchCount = 1 end
+    batchCount = math.floor(batchCount)
     local counts = EventTrigger.Delivery.CountItems(inventory, requiredItems)
     
     if matchMode == "any" then
-        -- OR logic: player needs at least ONE of the required items
+        -- OR logic: player needs at least ONE of the required items (x batch)
         local hasAny = false
         for _, req in ipairs(requiredItems) do
             local key = req.fullType .. "|" .. req.displayName
-            if (counts[key] or 0) >= req.count then
+            if (counts[key] or 0) >= req.count * batchCount then
                 hasAny = true
                 break
             end
@@ -221,10 +231,10 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
             return false, getText("UI_ET_Msg_MissingItems")
         end
     else
-        -- AND logic (default): player needs ALL required items
+        -- AND logic (default): player needs ALL required items (x batch)
         for _, req in ipairs(requiredItems) do
             local key = req.fullType .. "|" .. req.displayName
-            if (counts[key] or 0) < req.count then
+            if (counts[key] or 0) < req.count * batchCount then
                 return false, getText("UI_ET_Msg_MissingItems")
             end
         end
@@ -516,19 +526,28 @@ function EventTriggerDeliveryConfirm:create()
     self:setAlwaysOnTop(true)
 
     local bh = 34
-    local gap = 24
+    local gap = 16
     local confirmLabel = getText("UI_ET_Btn_Confirm")
+    local batchLabel = getText("UI_ET_Btn_Batch")
     local cancelLabel = getText("UI_ET_Btn_Cancel")
     local confirmW = EventTrigger.btnW(confirmLabel)
+    local batchW = EventTrigger.btnW(batchLabel)
     local cancelW = EventTrigger.btnW(cancelLabel)
     local btnY = self.height - bh - 16
-    local confX = (self.width - (confirmW + gap + cancelW)) / 2
+    local totalW = confirmW + gap + batchW + gap + cancelW
+    local bx = (self.width - totalW) / 2
 
-    self.confirmBtn = ISButton:new(confX, btnY, confirmW, bh, confirmLabel, self, EventTriggerDeliveryConfirm.onConfirm)
+    self.confirmBtn = ISButton:new(bx, btnY, confirmW, bh, confirmLabel, self, EventTriggerDeliveryConfirm.onConfirm)
     self.confirmBtn:initialise()
     self:addChild(self.confirmBtn)
+    bx = bx + confirmW + gap
 
-    self.cancelBtn = ISButton:new(confX + confirmW + gap, btnY, cancelW, bh, cancelLabel, self, EventTriggerDeliveryConfirm.onCancel)
+    self.batchBtn = ISButton:new(bx, btnY, batchW, bh, batchLabel, self, EventTriggerDeliveryConfirm.onBatch)
+    self.batchBtn:initialise()
+    self:addChild(self.batchBtn)
+    bx = bx + batchW + gap
+
+    self.cancelBtn = ISButton:new(bx, btnY, cancelW, bh, cancelLabel, self, EventTriggerDeliveryConfirm.onCancel)
     self.cancelBtn:initialise()
     self:addChild(self.cancelBtn)
 
@@ -539,60 +558,50 @@ function EventTriggerDeliveryConfirm:create()
     self.itemY = 28 + math.floor(18 * EventTrigger.US)
 end
 
-function EventTriggerDeliveryConfirm:onConfirm()
-    local player = getPlayer()
-    local delivery = self.delivery
-    if not player or not delivery then
-        dbg("onConfirm: missing player or delivery, abort")
-        self:close()
-        return
-    end
+-- Finalize a delivery transaction (single or batch), shared by confirm + batch flows.
+function EventTrigger.Delivery.FinalizeDelivery(player, delivery, batchCount)
+    if not player or not delivery then return end
+    batchCount = tonumber(batchCount) or 1
+    if batchCount < 1 then batchCount = 1 end
+    batchCount = math.floor(batchCount)
 
     local playerKey = player:getUsername() or ""
     EventTrigger.Delivery._activePrompt[playerKey] = nil
     EventTrigger.Delivery._pendingDpId[playerKey] = nil
-    self:close()
 
     -- Determine selectedORIndex for OR mode
     local matchMode = delivery.matchMode or "all"
-    local selectedORIndex = nil
-    if matchMode == "any" then
-        local collectCount = 0
-        local targetIdx = nil
+    local selectedORIndex = delivery._selectedORItemIndex
+    if matchMode == "any" and not selectedORIndex then
+        -- Single collect item in ANY mode: pick it automatically
         for idx, req in ipairs(delivery.requiredItems or {}) do
             if req.collect ~= false then
-                collectCount = collectCount + 1
-                targetIdx = idx
+                selectedORIndex = idx
+                break
             end
-        end
-        if collectCount == 1 then
-            selectedORIndex = targetIdx
         end
     end
 
+    delivery._batchCount = batchCount
+
     if EventTrigger.IsMultiplayer() then
-        -- Client validates (dual-match), server executes all inventory (PZ Marketplace pattern)
         local ok, msg = EventTrigger.Delivery.Validate(player, delivery)
         if not ok then
             HaloTextHelper.addBadText(player, msg)
             return
         end
-        local args = { id = delivery.id }
-        if selectedORIndex then
-            args.selectedORIndex = selectedORIndex
-        end
+        local args = { id = delivery.id, batchCount = batchCount }
+        if selectedORIndex then args.selectedORIndex = selectedORIndex end
         sendClientCommand("EventTrigger", "confirmDelivery", args)
     else
-        if selectedORIndex then
-            delivery._selectedORItemIndex = selectedORIndex
-        end
+        if selectedORIndex then delivery._selectedORItemIndex = selectedORIndex end
         local ok, msg = EventTrigger.Delivery.Execute(player, delivery)
         if ok then
             HaloTextHelper.addGoodText(player, msg)
-            delivery.triggerCount = (delivery.triggerCount or 0) + 1
+            delivery.triggerCount = (delivery.triggerCount or 0) + batchCount
             if not delivery.triggeredBy then delivery.triggeredBy = {} end
             if not delivery.playerDeliveries then delivery.playerDeliveries = {} end
-            delivery.playerDeliveries[playerKey] = (delivery.playerDeliveries[playerKey] or 0) + 1
+            delivery.playerDeliveries[playerKey] = (delivery.playerDeliveries[playerKey] or 0) + batchCount
             local cd = delivery.cooldown or {}
             if not EventTrigger.isCooldownZero(cd) then
                 if not delivery.playerCooldowns then delivery.playerCooldowns = {} end
@@ -605,6 +614,24 @@ function EventTriggerDeliveryConfirm:onConfirm()
             HaloTextHelper.addBadText(player, msg)
         end
     end
+end
+
+function EventTriggerDeliveryConfirm:onConfirm()
+    local player = getPlayer()
+    local delivery = self.delivery
+    self:close()
+    EventTrigger.Delivery.FinalizeDelivery(player, delivery, 1)
+end
+
+function EventTriggerDeliveryConfirm:onBatch()
+    local player = getPlayer()
+    local delivery = self.delivery
+    if not player or not delivery then
+        self:close()
+        return
+    end
+    self:close()
+    EventTrigger.Delivery.ShowBatchPrompt(player, delivery)
 end
 
 function EventTriggerDeliveryConfirm:onCancel()
@@ -723,6 +750,237 @@ end
 function EventTriggerDeliveryConfirm:new(player, delivery)
     local w = EventTrigger.fitW(640)
     local h = EventTrigger.fitH(420)
+    local sw = getCore():getScreenWidth()
+    local sh = getCore():getScreenHeight()
+    local x, y = (sw - w) / 2, (sh - h) / 2
+
+    local o = ISPanel:new(x, y, w, h)
+    setmetatable(o, self)
+    self.__index = self
+    o.borderColor = { r = 0.5, g = 0.5, b = 0.5, a = 1 }
+    o.backgroundColor = { r = 0, g = 0, b = 0, a = 0.9 }
+    o.width = w
+    o.height = h
+    o.player = player
+    o.delivery = delivery
+    o.dragging = false
+    return o
+end
+
+-- ============================================================
+-- Batch Count Prompt (choose N, preview totals, then finalize)
+-- ============================================================
+EventTrigger.Delivery._batchPromptUI = nil
+
+function EventTrigger.Delivery.ShowBatchPrompt(player, delivery)
+    if EventTrigger.Delivery._batchPromptUI then
+        EventTrigger.Delivery._batchPromptUI:close()
+    end
+    local ui = EventTriggerBatchCountPrompt:new(player, delivery)
+    ui:initialise()
+    ui:addToUIManager()
+    EventTrigger.Delivery._batchPromptUI = ui
+end
+
+EventTriggerBatchCountPrompt = ISPanel:derive("EventTriggerBatchCountPrompt")
+
+function EventTriggerBatchCountPrompt:initialise()
+    ISPanel.initialise(self)
+    self:create()
+end
+
+function EventTriggerBatchCountPrompt:computeCosts()
+    self.costItems = {}
+    self.maxN = nil
+    local inv = self.player:getInventory()
+    local counts = EventTrigger.Delivery.CountItems(inv, self.delivery.requiredItems or {})
+    for _, req in ipairs(self.delivery.requiredItems or {}) do
+        if req.collect ~= false then
+            local key = req.fullType .. "|" .. req.displayName
+            local have = counts[key] or 0
+            local maxForThis = math.floor(have / (req.count or 1))
+            if self.maxN == nil or maxForThis < self.maxN then
+                self.maxN = maxForThis
+            end
+            self.costItems[#self.costItems + 1] = {
+                fullType = req.fullType,
+                displayName = req.displayName,
+                count = req.count,
+                have = have,
+            }
+        end
+    end
+    if self.maxN == nil or self.maxN < 1 then self.maxN = 1 end
+    self.entryValue = 1
+end
+
+function EventTriggerBatchCountPrompt:create()
+    self:setAlwaysOnTop(true)
+    self:computeCosts()
+
+    self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerBatchCountPrompt.onCancel)
+    self.closeBtn:initialise()
+    self:addChild(self.closeBtn)
+
+    local s = EventTrigger.US
+    local rowH = math.floor(20 * s)
+    local padX = 24
+    local y = 28 + math.floor(18 * s)
+
+    self.costHeaderY = y
+    y = y + rowH + math.floor(2 * s)
+    self.costItemsY = y
+    y = y + #self.costItems * rowH + math.floor(8 * s)
+
+    self.rewardHeaderY = y
+    y = y + rowH + math.floor(2 * s)
+    self.rewardItemsY = y
+    y = y + #(self.delivery.rewardItems or {}) * rowH + math.floor(12 * s)
+
+    self.entryY = y
+    local entryH = math.floor(30 * s)
+    y = y + entryH + math.floor(10 * s)
+    self.previewY = y
+    y = y + rowH * 2 + math.floor(14 * s)
+    self.btnY = y
+
+    self.rowH = rowH
+    self.padX = padX
+    self.entryH = entryH
+
+    self.entry = ISTextEntryBox:new("1", padX, self.entryY, self.width - padX * 2, entryH)
+    self.entry:initialise()
+    self.entry:instantiate()
+    self.entry:setOnlyNumbers(true)
+    self:addChild(self.entry)
+
+    local bh = math.floor(34 * s)
+    local gap = 16
+    local confirmLabel = getText("UI_ET_Btn_Confirm")
+    local cancelLabel = getText("UI_ET_Btn_Cancel")
+    local confirmW = EventTrigger.btnW(confirmLabel)
+    local cancelW = EventTrigger.btnW(cancelLabel)
+    local totalW = confirmW + gap + cancelW
+    local bx = (self.width - totalW) / 2
+
+    self.confirmBtn = ISButton:new(bx, self.btnY, confirmW, bh, confirmLabel, self, EventTriggerBatchCountPrompt.onOk)
+    self.confirmBtn:initialise()
+    self:addChild(self.confirmBtn)
+    bx = bx + confirmW + gap
+
+    self.cancelBtn = ISButton:new(bx, self.btnY, cancelW, bh, cancelLabel, self, EventTriggerBatchCountPrompt.onCancel)
+    self.cancelBtn:initialise()
+    self:addChild(self.cancelBtn)
+end
+
+function EventTriggerBatchCountPrompt:onOk()
+    local raw = self.entry and self.entry:getText() or ""
+    local n = tonumber(raw)
+    if n == nil then n = 1 end
+    n = math.floor(n)
+    if n < 1 then n = 1 end
+    if n > self.maxN then n = self.maxN end
+    self:close()
+    EventTrigger.Delivery.FinalizeDelivery(self.player, self.delivery, n)
+end
+
+function EventTriggerBatchCountPrompt:onCancel()
+    local player = self.player
+    local playerKey = player and (player:getUsername() or "")
+    if playerKey then
+        EventTrigger.Delivery._activePrompt[playerKey] = nil
+        EventTrigger.Delivery._pendingDpId[playerKey] = nil
+    end
+    self:close()
+end
+
+function EventTriggerBatchCountPrompt:close()
+    if EventTrigger.Delivery._batchPromptUI == self then
+        EventTrigger.Delivery._batchPromptUI = nil
+    end
+    self:setVisible(false)
+    self:removeFromUIManager()
+end
+
+function EventTriggerBatchCountPrompt:onMouseDown(x, y)
+    if y >= 0 and y < 28 then
+        self.dragging = true
+        self.dragOfsX = getMouseX() - self.x
+        self.dragOfsY = getMouseY() - self.y
+        self:setCapture(true)
+        return true
+    end
+    return ISPanel.onMouseDown(self, x, y)
+end
+
+function EventTriggerBatchCountPrompt:onMouseMove(x, y)
+    if self.dragging then
+        self:setX(getMouseX() - self.dragOfsX)
+        self:setY(getMouseY() - self.dragOfsY)
+        return true
+    end
+end
+
+function EventTriggerBatchCountPrompt:onMouseUp(x, y)
+    if self.dragging then
+        self.dragging = false
+        self:setCapture(false)
+        return true
+    end
+end
+
+function EventTriggerBatchCountPrompt:prerender()
+    ISPanel.prerender(self)
+    self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
+    self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
+    self:drawTextCentre(getText("UI_ET_Batch_Title"), self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+
+    local padX = self.padX
+    local rowH = self.rowH
+
+    -- Cost header
+    self:drawText(getText("UI_ET_Batch_Cost"), padX, self.costHeaderY, 0.9, 0.7, 0.3, 1, UIFont.Small)
+    local cy = self.costItemsY
+    for _, c in ipairs(self.costItems) do
+        local txt = fitText(string.format("%s  x%d  (%s %d)", c.displayName, c.count, getText("UI_ET_Batch_Have"), c.have), UIFont.Small, self.width - padX * 2)
+        self:drawText(txt, padX + 8, cy, 1, 1, 1, 1, UIFont.Small)
+        cy = cy + rowH
+    end
+
+    -- Reward header
+    self:drawText(getText("UI_ET_Batch_Reward"), padX, self.rewardHeaderY, 0.3, 0.9, 0.5, 1, UIFont.Small)
+    local ry = self.rewardItemsY
+    for _, r in ipairs(self.delivery.rewardItems or {}) do
+        local txt = fitText((r.displayName or "?") .. "  x" .. tostring(r.count), UIFont.Small, self.width - padX * 2)
+        self:drawText(txt, padX + 8, ry, 1, 1, 1, 1, UIFont.Small)
+        ry = ry + rowH
+    end
+
+    -- Input label
+    self:drawText(getText("UI_ET_Batch_Count"), padX, self.entryY - rowH, 0.7, 0.8, 0.9, 1, UIFont.Small)
+
+    -- Preview (read current entry value, clamp to maxN)
+    local raw = self.entry and self.entry:getText() or ""
+    local n = tonumber(raw) or 1
+    n = math.floor(n)
+    if n < 1 then n = 1 end
+    if n > self.maxN then n = self.maxN end
+
+    local costParts = {}
+    for _, c in ipairs(self.costItems) do
+        costParts[#costParts + 1] = (c.displayName or "?") .. " x" .. (c.count * n)
+    end
+    local rewardParts = {}
+    for _, r in ipairs(self.delivery.rewardItems or {}) do
+        rewardParts[#rewardParts + 1] = (r.displayName or "?") .. " x" .. (r.count * n)
+    end
+    self:drawText(getText("UI_ET_Batch_PreviewCost", table.concat(costParts, ", ")), padX, self.previewY, 0.9, 0.5, 0.3, 1, UIFont.Small)
+    self:drawText(getText("UI_ET_Batch_PreviewReward", table.concat(rewardParts, ", ")), padX, self.previewY + rowH, 0.5, 0.9, 0.5, 1, UIFont.Small)
+end
+
+function EventTriggerBatchCountPrompt:new(player, delivery)
+    local w = EventTrigger.fitW(560)
+    local h = EventTrigger.fitH(560)
     local sw = getCore():getScreenWidth()
     local sh = getCore():getScreenHeight()
     local x, y = (sw - w) / 2, (sh - h) / 2

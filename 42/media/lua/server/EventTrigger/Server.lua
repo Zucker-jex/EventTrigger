@@ -526,7 +526,7 @@ Server.onClientCommand = function(module, command, player, args)
         return
     end
 
-    -- ---------- Confirm delivery (PZ Marketplace pattern) ----------
+    -- ---------- Confirm delivery (batch-aware, atomic) ----------
     if command == Shared.COMMANDS.CONFIRM_DELIVERY then
         local dpIdx = findDeliveryById(args.id)
         if not dpIdx then
@@ -549,7 +549,13 @@ Server.onClientCommand = function(module, command, player, args)
         local cooldown = dp.cooldown or {}
         local selectedORIndex = args.selectedORIndex
 
-        -- Check cooldown
+        -- Batch count (N): positive integer, default 1, capped for safety
+        local batchCount = tonumber(args.batchCount) or 1
+        batchCount = math.floor(batchCount)
+        if batchCount < 1 then batchCount = 1 end
+        if batchCount > 1000 then batchCount = 1000 end
+
+        -- Check cooldown (before touching inventory)
         if not Shared.isCooldownZero(cooldown) then
             dp.playerCooldowns = dp.playerCooldowns or {}
             local lastDelivery = dp.playerCooldowns[pid]
@@ -565,103 +571,145 @@ Server.onClientCommand = function(module, command, player, args)
             end
         end
 
-        -- 1. Check and remove required items
-        local items = inv:getItems()
-        local hasRequired = false
-        local matchedReq = nil
+        -- Caps: batch counts toward per-player / global limits
+        if not dp.playerDeliveries then dp.playerDeliveries = {} end
+        local myCount = dp.playerDeliveries[pid] or 0
+        local maxPP = dp.maxPerPlayer or -1
+        if maxPP ~= -1 and myCount + batchCount > maxPP then
+            sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
+                action = "failed", reason = "Exchange limit reached.",
+            })
+            return
+        end
+        local maxP = dp.maxPlayers or -1
+        if maxP ~= -1 and myCount == 0 then
+            local uniquePlayers = 0
+            for _ in pairs(dp.playerDeliveries) do uniquePlayers = uniquePlayers + 1 end
+            if uniquePlayers >= maxP then
+                sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
+                    action = "failed", reason = "Exchange limit reached.",
+                })
+                return
+            end
+        end
 
+        -- Build effective cost list (what to deduct this transaction)
+        local costs = {}
         if matchMode == "any" then
-            -- OR mode: use selected item index or find first matching
             local targetIdx = selectedORIndex or 1
             local idx = 0
             for _, req in ipairs(dp.requiredItems or {}) do
                 idx = idx + 1
                 if idx == targetIdx then
-                    local toRemove = req.count
-                    local found = false
-                    for i = items:size() - 1, 0, -1 do
-                        if toRemove <= 0 then break end
-                        local it = items:get(i)
-                        if it and it:getFullType() == req.fullType and inv:contains(it) then
-                            found = true
-                            if req.collect ~= false then
-                                inv:Remove(it)
-                                sendRemoveItemFromContainer(inv, it)
-                                toRemove = toRemove - 1
-                            end
-                        end
-                    end
-                    if found then
-                        hasRequired = true
-                        matchedReq = req
+                    if req.collect ~= false then
+                        costs[#costs + 1] = { fullType = req.fullType, count = req.count }
                     end
                     break
                 end
             end
-            if not hasRequired then
+        else
+            for _, req in ipairs(dp.requiredItems or {}) do
+                if req.collect ~= false then
+                    costs[#costs + 1] = { fullType = req.fullType, count = req.count }
+                end
+            end
+        end
+
+        local items = inv:getItems()
+        local function countOwned(fullType)
+            local n = 0
+            for i = 0, items:size() - 1 do
+                local it = items:get(i)
+                if it and it:getFullType() == fullType and inv:contains(it) then
+                    n = n + 1
+                end
+            end
+            return n
+        end
+
+        -- Atomic pre-check: ensure enough stock for the whole batch
+        for _, cost in ipairs(costs) do
+            if countOwned(cost.fullType) < cost.count * batchCount then
                 sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
                     action = "failed", reason = "Missing required items in backpack!",
                 })
                 return
             end
-        else
-            -- AND mode (default): check all required items
-            local actuallyRemoved = 0
-            for _, req in ipairs(dp.requiredItems or {}) do
-                if req.collect ~= false then
-                    local toRemove = req.count
-                    for i = items:size() - 1, 0, -1 do
-                        if toRemove <= 0 then break end
-                        local it = items:get(i)
-                        if it and it:getFullType() == req.fullType and inv:contains(it) then
-                            inv:Remove(it)
-                            sendRemoveItemFromContainer(inv, it)
-                            actuallyRemoved = actuallyRemoved + 1
-                            toRemove = toRemove - 1
-                        end
-                    end
-                    if toRemove > 0 then
-                        sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
-                            action = "failed", reason = "Missing required items in backpack!",
-                        })
-                        return
-                    end
-                end
-            end
-            hasRequired = true
         end
 
-        -- 2. Add reward items (exact PZ Marketplace pattern: AddItem + sync)
+        -- Deduct cost items (record for rollback)
+        local removedItems = {}
+        for _, cost in ipairs(costs) do
+            local toRemove = cost.count * batchCount
+            for i = items:size() - 1, 0, -1 do
+                if toRemove <= 0 then break end
+                local it = items:get(i)
+                if it and it:getFullType() == cost.fullType and inv:contains(it) then
+                    inv:Remove(it)
+                    sendRemoveItemFromContainer(inv, it)
+                    removedItems[#removedItems + 1] = it
+                    toRemove = toRemove - 1
+                end
+            end
+        end
+
+        -- Grant rewards (N x), rollback everything if any AddItem fails
+        local grantedItems = {}
+        local rewardFailed = false
         for _, reward in ipairs(dp.rewardItems or {}) do
-            for _ = 1, reward.count do
+            for _ = 1, reward.count * batchCount do
                 local newItem = inv:AddItem(reward.fullType)
                 if newItem then
                     if reward.displayName and #reward.displayName > 0 then
                         newItem:setName(reward.displayName)
                     end
                     sendAddItemToContainer(inv, newItem)
+                    grantedItems[#grantedItems + 1] = newItem
+                else
+                    rewardFailed = true
+                    break
                 end
             end
+            if rewardFailed then break end
         end
 
-        -- 3. Track + persist
-        dp.triggerCount = (dp.triggerCount or 0) + 1
+        if rewardFailed then
+            -- Rollback granted rewards
+            for _, g in ipairs(grantedItems) do
+                inv:Remove(g)
+            end
+            -- Rollback removed cost items
+            for _, r in ipairs(removedItems) do
+                local back = inv:AddItem(r:getFullType())
+                if back then
+                    local dn = r:getDisplayName()
+                    if dn and #dn > 0 then back:setName(dn) end
+                    sendAddItemToContainer(inv, back)
+                end
+            end
+            sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
+                action = "failed", reason = "Not enough backpack space!",
+            })
+            return
+        end
+
+        -- Track + persist (batch counts toward limits)
+        dp.triggerCount = (dp.triggerCount or 0) + batchCount
         if not dp.triggeredBy then dp.triggeredBy = {} end
-        if not dp.playerDeliveries then dp.playerDeliveries = {} end
-        dp.playerDeliveries[pid] = (dp.playerDeliveries[pid] or 0) + 1
+        dp.playerDeliveries[pid] = myCount + batchCount
         table.insert(dp.triggeredBy, {
             playerId = pid, timestamp = os.time(),
             timeStr = os.date("!%Y-%m-%d %H:%M:%S"),
         })
-        
+
         -- Update cooldown timestamp
         if not Shared.isCooldownZero(cooldown) then
             dp.playerCooldowns = dp.playerCooldowns or {}
             dp.playerCooldowns[pid] = Shared.cooldownNowSeconds(cooldown.mode)
         end
-        
+
         Persistence.saveOneDeliveryPoint(dp)
-        Logger:info("ConfirmDelivery: dp=%s player=%s count=%d", dp.id, pid, dp.triggerCount)
+        Logger:info("ConfirmDelivery: dp=%s player=%s count=%d batch=%d", dp.id, pid, dp.triggerCount, batchCount)
 
         sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
             action = "completed", message = "Delivery completed!",
