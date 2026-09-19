@@ -226,6 +226,7 @@ function Persistence.loadDeliveryPoints()
             dp.maxPerPlayer  = dp.maxPerPlayer or -1
             dp.requiredItems = dp.requiredItems or {}
             dp.rewardItems   = dp.rewardItems or {}
+            dp.branches      = dp.branches or {}
             dp.playerDeliveries = dp.playerDeliveries or {}
             dp.cooldown      = Shared.makeCooldown(dp.cooldown or dp)
             dp.playerCooldowns = dp.playerCooldowns or {}

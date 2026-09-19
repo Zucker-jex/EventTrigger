@@ -262,6 +262,26 @@ EventTriggerShared.makeDeliveryItem = function(args)
     }
 end
 
+-- Build a single cost option (one of several selectable consume items, 需求3)
+EventTriggerShared.makeCostOption = function(args)
+    return {
+        fullType    = tostring(args.fullType or ""),
+        displayName = tostring(args.displayName or ""),
+        count       = math.max(1, args.count or 1),
+    }
+end
+
+-- Build a single exchange branch (same consume, multiple reward branches 需求2;
+-- multiple consume options 需求3 via costOptions)
+EventTriggerShared.makeBranch = function(args)
+    return {
+        id          = args.id,                 -- 1-based branch index
+        enabled     = args.enabled ~= false,
+        costOptions = args.costOptions or {},  -- 可选消耗物（单选其一）
+        rewards     = args.rewards or {},      -- 该分支奖励
+    }
+end
+
 -- Build complete delivery point object
 EventTriggerShared.makeDeliveryPoint = function(args)
     return {
@@ -275,6 +295,7 @@ EventTriggerShared.makeDeliveryPoint = function(args)
         requiredItems = args.requiredItems or {},
         rewardItems   = args.rewardItems or {},
         matchMode     = args.matchMode or "all",  -- "all" = AND logic, "any" = OR logic
+        branches      = args.branches or {},      -- 多兑换分支（为空则回退旧字段）
         maxPlayers    = math.max(-1, args.maxPlayers or -1),
         maxPerPlayer  = math.max(-1, args.maxPerPlayer or -1),
         cooldown      = EventTriggerShared.makeCooldown(args.cooldown or args),
@@ -294,6 +315,53 @@ EventTriggerShared.validateDeliveryItem = function(item)
     if not item.fullType or #item.fullType == 0 then return false end
     if not item.count or item.count < 1 then return false end
     return true
+end
+
+-- Resolve effective exchange plan for a delivery point + player selection.
+-- Returns costOptions (deduct list) + rewards, honoring branches when present.
+-- branchId: selected branch (1-based); costOptionIndex: selected cost option (1-based, 需求3)
+EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
+    dp = dp or {}
+    local branches = dp.branches or {}
+
+    -- Legacy path: no branches
+    if #branches == 0 then
+        local costOptions = {}
+        for _, req in ipairs(dp.requiredItems or {}) do
+            if req.collect ~= false then
+                costOptions[#costOptions + 1] = {
+                    fullType = req.fullType,
+                    displayName = req.displayName,
+                    count = req.count,
+                }
+            end
+        end
+        return costOptions, dp.rewardItems or {}, nil
+    end
+
+    -- Branch path: pick the selected branch (default 1)
+    local branch = branches[1]
+    if branchId and branches[branchId] and branches[branchId].enabled ~= false then
+        branch = branches[branchId]
+    end
+    if not branch or branch.enabled == false then
+        return nil, nil, "Branch unavailable"
+    end
+
+    -- Within branch: pick cost option (需求3), else use first
+    local costOptions = branch.costOptions or {}
+    local chosen
+    if costOptionIndex and costOptions[costOptionIndex] then
+        chosen = costOptions[costOptionIndex]
+    elseif #costOptions > 0 then
+        chosen = costOptions[1]
+    end
+    if not chosen then
+        return nil, nil, "No cost option"
+    end
+
+    local deduct = { chosen }
+    return deduct, branch.rewards or {}, nil
 end
 
 -- Build delivery index file data

@@ -145,8 +145,8 @@ end
 function EventTrigger.Delivery.Execute(player, deliveryData)
     if not player or not deliveryData then return false, getText("UI_ET_Msg_InvalidData") end
     local inventory = player:getInventory()
-    local requiredItems = deliveryData.requiredItems or {}
-    local rewardItems = deliveryData.rewardItems or {}
+    -- Branch-aware resolve: use selected branch's cost/reward
+    local requiredItems, rewardItems = EventTrigger.Delivery.resolveView(deliveryData)
     local matchMode = deliveryData.matchMode or "all"
     local selectedORIndex = deliveryData._selectedORItemIndex
     local batchCount = tonumber(deliveryData._batchCount) or 1
@@ -210,7 +210,8 @@ end
 function EventTrigger.Delivery.Validate(player, deliveryData)
     if not player or not deliveryData then return false, getText("UI_ET_Msg_InvalidData") end
     local inventory = player:getInventory()
-    local requiredItems = deliveryData.requiredItems or {}
+    -- Branch-aware resolve: use selected branch's cost/reward
+    local requiredItems, _ = EventTrigger.Delivery.resolveView(deliveryData)
     local matchMode = deliveryData.matchMode or "all"
     local batchCount = tonumber(deliveryData._batchCount) or 1
     if batchCount < 1 then batchCount = 1 end
@@ -485,6 +486,39 @@ end
 -- ============================================================
 -- Delivery Confirm UI (shows required & reward items, Confirm/Cancel)
 -- ============================================================
+
+-- Resolve the display/execution plan for a delivery (branch-aware).
+-- Returns costItems (deduct list) + rewardItems + effective branch.
+function EventTrigger.Delivery.resolveView(delivery)
+    local branches = delivery.branches or {}
+
+    -- Legacy path
+    if #branches == 0 then
+        return (delivery.requiredItems or {}), (delivery.rewardItems or {})
+    end
+
+    -- Branch path
+    local branch = branches[1]
+    local bid = delivery._selectedBranchId
+    if bid and branches[bid] and branches[bid].enabled ~= false then
+        branch = branches[bid]
+    end
+    if not branch or branch.enabled == false then
+        return {}, {}
+    end
+
+    local costItems = {}
+    for _, co in ipairs(branch.costOptions or {}) do
+        costItems[#costItems + 1] = {
+            fullType = co.fullType,
+            displayName = co.displayName,
+            count = co.count,
+            collect = true,
+        }
+    end
+    return costItems, (branch.rewards or {})
+end
+
 function EventTrigger.Delivery.ShowDeliveryConfirm(player, delivery)
     if EventTrigger.Delivery._confirmUI then
         EventTrigger.Delivery._confirmUI:close()
@@ -492,23 +526,36 @@ function EventTrigger.Delivery.ShowDeliveryConfirm(player, delivery)
     if EventTrigger.Delivery._itemSelectUI then
         EventTrigger.Delivery._itemSelectUI:close()
     end
-    
-    local matchMode = delivery.matchMode or "all"
-    if matchMode == "any" then
-        -- Check if there are multiple matching items with collect=true
+
+    local branches = delivery.branches or {}
+
+    -- 需求2: multiple reward branches → branch selection first.
+    -- Skip if a branch has already been chosen (avoids re-showing the selector).
+    if #branches >= 2 then
+        local chosen = delivery._selectedBranchId
+        if not chosen or not branches[chosen] or branches[chosen].enabled == false then
+            EventTrigger.Delivery.ShowBranchSelect(player, delivery)
+            return
+        end
+    end
+
+    -- Single branch: preselect it
+    if #branches == 1 then
+        delivery._selectedBranchId = branches[1].id
+    end
+
+    -- Legacy ANY mode with multiple collect items → item selection
+    if #branches == 0 and (delivery.matchMode or "all") == "any" then
         local collectCount = 0
         for _, req in ipairs(delivery.requiredItems or {}) do
-            if req.collect ~= false then
-                collectCount = collectCount + 1
-            end
+            if req.collect ~= false then collectCount = collectCount + 1 end
         end
         if collectCount > 1 then
-            -- Show item selection UI for OR mode
             EventTrigger.Delivery.ShowItemSelectForOR(player, delivery)
             return
         end
     end
-    
+
     local ui = EventTriggerDeliveryConfirm:new(player, delivery)
     ui:initialise()
     ui:addToUIManager()
@@ -592,6 +639,8 @@ function EventTrigger.Delivery.FinalizeDelivery(player, delivery, batchCount)
         end
         local args = { id = delivery.id, batchCount = batchCount }
         if selectedORIndex then args.selectedORIndex = selectedORIndex end
+        if delivery._selectedBranchId then args.branchId = delivery._selectedBranchId end
+        if delivery._selectedCostOptionIndex then args.costOptionIndex = delivery._selectedCostOptionIndex end
         sendClientCommand("EventTrigger", "confirmDelivery", args)
     else
         if selectedORIndex then delivery._selectedORItemIndex = selectedORIndex end
@@ -697,11 +746,14 @@ function EventTriggerDeliveryConfirm:prerender()
     local rewColW = self.width - rightX - 20
     local y = self.itemY
 
-    -- Show match mode and cooldown info
-    local modeStr = (delivery.matchMode == "any") and getText("UI_ET_Dlv_Any") or getText("UI_ET_Dlv_All")
-    local modeText = getText("UI_ET_Dlv_MatchModeLabel", modeStr)
-    self:drawText(modeText, leftX, y, 0.9, 0.9, 0.3, 1, UIFont.Small)
-    y = y + rowH
+    -- Show match mode and cooldown info (only for legacy path)
+    local branches = delivery.branches or {}
+    if #branches == 0 then
+        local modeStr = (delivery.matchMode == "any") and getText("UI_ET_Dlv_Any") or getText("UI_ET_Dlv_All")
+        local modeText = getText("UI_ET_Dlv_MatchModeLabel", modeStr)
+        self:drawText(modeText, leftX, y, 0.9, 0.9, 0.3, 1, UIFont.Small)
+        y = y + rowH
+    end
 
     local cd = delivery.cooldown or {}
     if not EventTrigger.isCooldownZero(cd) then
@@ -710,10 +762,12 @@ function EventTriggerDeliveryConfirm:prerender()
         y = y + rowH
     end
 
+    -- Resolve the effective cost/reward for display (branch-aware)
+    local reqItems, rewItems = EventTrigger.Delivery.resolveView(delivery)
+
     -- Left: Required Items
     self:drawText(getText("UI_ET_Dlv_RequiredItems"), leftX, y, 0.9, 0.7, 0.3, 1, UIFont.Small)
     y = y + rowH
-    local reqItems = delivery.requiredItems or {}
     if #reqItems == 0 then
         self:drawText(getText("UI_ET_Inv_None"), leftX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
     else
@@ -731,7 +785,6 @@ function EventTriggerDeliveryConfirm:prerender()
     y = self.itemY
     self:drawText(getText("UI_ET_Dlv_RewardItems"), rightX, y, 0.3, 0.9, 0.5, 1, UIFont.Small)
     y = y + rowH
-    local rewItems = delivery.rewardItems or {}
     if #rewItems == 0 then
         self:drawText(getText("UI_ET_Inv_None"), rightX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
     else
@@ -793,8 +846,10 @@ function EventTriggerBatchCountPrompt:computeCosts()
     self.costItems = {}
     self.maxN = nil
     local inv = self.player:getInventory()
-    local counts = EventTrigger.Delivery.CountItems(inv, self.delivery.requiredItems or {})
-    for _, req in ipairs(self.delivery.requiredItems or {}) do
+    local reqItems, rewardItems = EventTrigger.Delivery.resolveView(self.delivery)
+    self.rewardItems = rewardItems
+    local counts = EventTrigger.Delivery.CountItems(inv, reqItems)
+    for _, req in ipairs(reqItems) do
         if req.collect ~= false then
             local key = req.fullType .. "|" .. req.displayName
             local have = counts[key] or 0
@@ -835,7 +890,7 @@ function EventTriggerBatchCountPrompt:create()
     self.rewardHeaderY = y
     y = y + rowH + math.floor(2 * s)
     self.rewardItemsY = y
-    y = y + #(self.delivery.rewardItems or {}) * rowH + math.floor(12 * s)
+    y = y + #(self.rewardItems or {}) * rowH + math.floor(12 * s)
 
     self.entryY = y
     local entryH = math.floor(30 * s)
@@ -950,7 +1005,7 @@ function EventTriggerBatchCountPrompt:prerender()
     -- Reward header
     self:drawText(getText("UI_ET_Batch_Reward"), padX, self.rewardHeaderY, 0.3, 0.9, 0.5, 1, UIFont.Small)
     local ry = self.rewardItemsY
-    for _, r in ipairs(self.delivery.rewardItems or {}) do
+    for _, r in ipairs(self.rewardItems or {}) do
         local txt = fitText((r.displayName or "?") .. "  x" .. tostring(r.count), UIFont.Small, self.width - padX * 2)
         self:drawText(txt, padX + 8, ry, 1, 1, 1, 1, UIFont.Small)
         ry = ry + rowH
@@ -971,7 +1026,7 @@ function EventTriggerBatchCountPrompt:prerender()
         costParts[#costParts + 1] = (c.displayName or "?") .. " x" .. (c.count * n)
     end
     local rewardParts = {}
-    for _, r in ipairs(self.delivery.rewardItems or {}) do
+    for _, r in ipairs(self.rewardItems or {}) do
         rewardParts[#rewardParts + 1] = (r.displayName or "?") .. " x" .. (r.count * n)
     end
     self:drawText(getText("UI_ET_Batch_PreviewCost", table.concat(costParts, ", ")), padX, self.previewY, 0.9, 0.5, 0.3, 1, UIFont.Small)
@@ -981,6 +1036,225 @@ end
 function EventTriggerBatchCountPrompt:new(player, delivery)
     local w = EventTrigger.fitW(560)
     local h = EventTrigger.fitH(560)
+    local sw = getCore():getScreenWidth()
+    local sh = getCore():getScreenHeight()
+    local x, y = (sw - w) / 2, (sh - h) / 2
+
+    local o = ISPanel:new(x, y, w, h)
+    setmetatable(o, self)
+    self.__index = self
+    o.borderColor = { r = 0.5, g = 0.5, b = 0.5, a = 1 }
+    o.backgroundColor = { r = 0, g = 0, b = 0, a = 0.9 }
+    o.width = w
+    o.height = h
+    o.player = player
+    o.delivery = delivery
+    o.dragging = false
+    return o
+end
+
+-- ============================================================
+-- Branch Selection UI (需求2: same consume, multiple reward branches)
+-- ============================================================
+EventTrigger.Delivery._branchSelectUI = nil
+
+function EventTrigger.Delivery.ShowBranchSelect(player, delivery)
+    if EventTrigger.Delivery._branchSelectUI then
+        EventTrigger.Delivery._branchSelectUI:close()
+    end
+    local ui = EventTriggerBranchSelectPrompt:new(player, delivery)
+    ui:initialise()
+    ui:addToUIManager()
+    EventTrigger.Delivery._branchSelectUI = ui
+end
+
+EventTriggerBranchSelectPrompt = ISPanel:derive("EventTriggerBranchSelectPrompt")
+
+function EventTriggerBranchSelectPrompt:initialise()
+    ISPanel.initialise(self)
+    self:create()
+end
+
+function EventTriggerBranchSelectPrompt:create()
+    self:setAlwaysOnTop(true)
+
+    self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerBranchSelectPrompt.onCancel)
+    self.closeBtn:initialise()
+    self:addChild(self.closeBtn)
+
+    local s = EventTrigger.US
+    self.rowH = math.floor(30 * s)
+    self.radioSize = 18
+    self.selectedBranchIndex = nil
+    self.branches = {}
+    for _, b in ipairs(self.delivery.branches or {}) do
+        if b.enabled ~= false then
+            self.branches[#self.branches + 1] = b
+        end
+    end
+
+    -- Shared cost options (same consume across all branches)
+    self.costOptions = {}
+    if #self.branches > 0 then
+        for _, co in ipairs(self.branches[1].costOptions or {}) do
+            self.costOptions[#self.costOptions + 1] = co
+        end
+    end
+    if #self.costOptions == 0 then
+        -- Fallback: legacy required items
+        for _, req in ipairs(self.delivery.requiredItems or {}) do
+            if req.collect ~= false then
+                self.costOptions[#self.costOptions + 1] = req
+            end
+        end
+    end
+
+    self.costHeaderY = 28 + math.floor(18 * s)
+    self.costItemsY = self.costHeaderY + self.rowH
+    self.listStartY = self.costItemsY + #self.costOptions * self.rowH + math.floor(8 * s)
+
+    local bh = math.floor(34 * s)
+    local gap = 16
+    self.btnY = self.height - bh - 16
+    local confirmLabel = getText("UI_ET_Btn_Confirm")
+    local cancelLabel = getText("UI_ET_Btn_Cancel")
+    local confirmW = EventTrigger.btnW(confirmLabel)
+    local cancelW = EventTrigger.btnW(cancelLabel)
+    local totalW = confirmW + gap + cancelW
+    local bx = (self.width - totalW) / 2
+
+    self.confirmBtn = ISButton:new(bx, self.btnY, confirmW, bh, confirmLabel, self, EventTriggerBranchSelectPrompt.onOk)
+    self.confirmBtn:initialise()
+    self:addChild(self.confirmBtn)
+    bx = bx + confirmW + gap
+
+    self.cancelBtn = ISButton:new(bx, self.btnY, cancelW, bh, cancelLabel, self, EventTriggerBranchSelectPrompt.onCancel)
+    self.cancelBtn:initialise()
+    self:addChild(self.cancelBtn)
+
+    self:updateConfirmState()
+end
+
+function EventTriggerBranchSelectPrompt:updateConfirmState()
+    self.confirmBtn:setEnable(self.selectedBranchIndex ~= nil)
+end
+
+function EventTriggerBranchSelectPrompt:onOk()
+    if not self.selectedBranchIndex then
+        HaloTextHelper.addBadText(getPlayer(), getText("UI_ET_Msg_PleaseSelect"))
+        return
+    end
+    local branch = self.branches[self.selectedBranchIndex]
+    self.delivery._selectedBranchId = branch.id
+    self:close()
+    EventTrigger.Delivery.ShowDeliveryConfirm(self.player, self.delivery)
+end
+
+function EventTriggerBranchSelectPrompt:onCancel()
+    local player = self.player
+    local playerKey = player and (player:getUsername() or "")
+    if playerKey then
+        EventTrigger.Delivery._activePrompt[playerKey] = nil
+        EventTrigger.Delivery._pendingDpId[playerKey] = nil
+    end
+    self:close()
+end
+
+function EventTriggerBranchSelectPrompt:close()
+    if EventTrigger.Delivery._branchSelectUI == self then
+        EventTrigger.Delivery._branchSelectUI = nil
+    end
+    self:setVisible(false)
+    self:removeFromUIManager()
+end
+
+function EventTriggerBranchSelectPrompt:onMouseDown(x, y)
+    if y >= 0 and y < 28 then
+        self.dragging = true
+        self.dragOfsX = getMouseX() - self.x
+        self.dragOfsY = getMouseY() - self.y
+        self:setCapture(true)
+        return true
+    end
+    -- Click a branch row selects it
+    for idx = 1, #self.branches do
+        local iy = self.listStartY + (idx - 1) * self.rowH
+        if y >= iy and y < iy + self.rowH then
+            self.selectedBranchIndex = idx
+            self:updateConfirmState()
+            return true
+        end
+    end
+    return ISPanel.onMouseDown(self, x, y)
+end
+
+function EventTriggerBranchSelectPrompt:onMouseMove(x, y)
+    if self.dragging then
+        self:setX(getMouseX() - self.dragOfsX)
+        self:setY(getMouseY() - self.dragOfsY)
+        return true
+    end
+end
+
+function EventTriggerBranchSelectPrompt:onMouseUp(x, y)
+    if self.dragging then
+        self.dragging = false
+        self:setCapture(false)
+        return true
+    end
+end
+
+function EventTriggerBranchSelectPrompt:prerender()
+    ISPanel.prerender(self)
+    self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
+    self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
+    self:drawTextCentre(getText("UI_ET_Branch_Title"), self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+
+    local leftX = 24
+
+    -- Cost (required items) display
+    self:drawText(getText("UI_ET_Branch_Cost"), leftX, self.costHeaderY, 0.9, 0.7, 0.3, 1, UIFont.Small)
+    local costY = self.costItemsY
+    if #self.costOptions == 0 then
+        self:drawText(getText("UI_ET_Inv_None"), leftX + 8, costY, 0.5, 0.5, 0.5, 1, UIFont.Small)
+    else
+        for _, co in ipairs(self.costOptions) do
+            local txt = fitText(string.format("%s  x%s", co.displayName or "?", tostring(co.count or 1)), UIFont.Small, self.width - 120)
+            self:drawText(txt, leftX + 8, costY, 1, 1, 1, 1, UIFont.Small)
+            costY = costY + self.rowH
+        end
+    end
+
+    -- Divider between cost and branch list
+    self:drawRect(leftX, self.listStartY - 5, self.width - 48, 1, 0.4, 0.4, 0.4, 0.4)
+
+    for idx, b in ipairs(self.branches) do
+        local iy = self.listStartY + (idx - 1) * self.rowH
+        local selected = (idx == self.selectedBranchIndex)
+        if selected then
+            self:drawRect(leftX, iy, self.width - 48, self.rowH - 2, 0.3, 0.25, 0.1, 0.3)
+        end
+
+        local cy = iy + (self.rowH - self.radioSize) / 2
+        self:drawRectBorder(leftX, cy, self.radioSize, self.radioSize, 0.8, 0.8, 0.8, 0.8)
+        if selected then
+            self:drawRect(leftX + 4, cy + 4, self.radioSize - 8, self.radioSize - 8, 1, 0.3, 0.9, 0.3)
+        end
+
+        -- Rewards summary
+        local rewardParts = {}
+        for _, r in ipairs(b.rewards or {}) do
+            rewardParts[#rewardParts + 1] = (r.displayName or "?") .. " x" .. tostring(r.count)
+        end
+        if #rewardParts == 0 then rewardParts[1] = getText("UI_ET_Inv_None") end
+        local txt = fitText(string.format("%s: %s", getText("UI_ET_Branch_Option", idx), table.concat(rewardParts, ", ")), UIFont.Small, self.width - 120)
+        self:drawText(txt, leftX + self.radioSize + 12, iy + 8, 1, 1, 1, 1, UIFont.Small)
+    end
+end
+
+function EventTriggerBranchSelectPrompt:new(player, delivery)
+    local w = EventTrigger.fitW(600)
+    local h = EventTrigger.fitH(480)
     local sw = getCore():getScreenWidth()
     local sh = getCore():getScreenHeight()
     local x, y = (sw - w) / 2, (sh - h) / 2
@@ -1295,6 +1569,9 @@ function EventTrigger.Delivery.StartSetup(x, y, z)
         maxPlayers = -1, maxPerPlayer = -1,
         matchMode = "all",
         cooldown = { mode = EventTrigger.COOLDOWN_NONE },
+        branchCount = 1,
+        branchRewards = {},
+        _currentBranchIdx = 1,
     }
     EventTrigger.Delivery.PromptHintText()
 end
@@ -1402,10 +1679,33 @@ function EventTrigger.Delivery.PromptCooldown()
         p.cooldown or { mode = EventTrigger.COOLDOWN_NONE },
         function(cd)
             p.cooldown = cd
-            EventTrigger.Delivery.PromptRequiredItems()
+            EventTrigger.Delivery.PromptBranchCount()
         end,
         function() EventTrigger.Delivery._setupPending = nil end,
         function() EventTrigger.Delivery.PromptMatchMode() end)
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+-- 需求2: choose how many reward branches (same consume, multiple rewards)
+function EventTrigger.Delivery.PromptBranchCount()
+    local p = EventTrigger.Delivery._setupPending
+    if not p then return end
+    local modal = EventTriggerNumberPrompt:new(
+        getText("UI_ET_Cfg_BranchCount"),
+        getText("UI_ET_Cfg_BranchCountHint"),
+        tostring(p.branchCount or 1),
+        function(num)
+            if num < 1 then num = 1 end
+            if num > 10 then num = 10 end
+            p.branchCount = num
+            p.branchRewards = {}
+            p._currentBranchIdx = 1
+            EventTrigger.Delivery.PromptRequiredItems()
+        end,
+        function() EventTrigger.Delivery._setupPending = nil end,
+        function() EventTrigger.Delivery.PromptCooldown() end,
+        { integer = true, min = 1, max = 10 })
     modal:initialise()
     modal:addToUIManager()
 end
@@ -1420,7 +1720,15 @@ end
 function EventTrigger.Delivery.PromptRewardItems()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
-    EventTrigger.Delivery.ShowItemSelection("reward")
+    if (p.branchCount or 1) <= 1 then
+        -- Single branch: legacy reward flow
+        EventTrigger.Delivery.ShowItemSelection("reward")
+    else
+        -- Multi-branch: configure branch 1 rewards
+        p._currentBranchIdx = 1
+        p.rewardItems = p.branchRewards[1] or {}
+        EventTrigger.Delivery.ShowItemSelection("reward_branch")
+    end
 end
 
 -- ============================================================
@@ -1902,6 +2210,18 @@ function EventTriggerDeliveryItemSelect:onDone()
 
     if mode == "required" then
         EventTrigger.Delivery.PromptRewardItems()
+    elseif mode == "reward_branch" then
+        -- Save this branch's rewards, advance to next
+        local idx = p._currentBranchIdx or 1
+        p.branchRewards = p.branchRewards or {}
+        p.branchRewards[idx] = p.rewardItems or {}
+        if idx < (p.branchCount or 1) then
+            p._currentBranchIdx = idx + 1
+            p.rewardItems = p.branchRewards[idx + 1] or {}
+            EventTrigger.Delivery.ShowItemSelection("reward_branch")
+        else
+            EventTrigger.Delivery.PlacePending()
+        end
     else
         -- reward mode done -> place the delivery point
         EventTrigger.Delivery.PlacePending()
@@ -1912,8 +2232,20 @@ function EventTriggerDeliveryItemSelect:onBack()
     local mode = self.mode or EventTrigger.Delivery._selectionMode or "required"
     self:close()
     if mode == "required" then
-        -- required items -> back to cooldown settings
-        EventTrigger.Delivery.PromptCooldown()
+        -- required items -> back to branch count
+        EventTrigger.Delivery.PromptBranchCount()
+    elseif mode == "reward_branch" then
+        local p = EventTrigger.Delivery._setupPending
+        local idx = p and (p._currentBranchIdx or 1)
+        if idx and idx > 1 then
+            -- back to previous branch's rewards
+            p._currentBranchIdx = idx - 1
+            p.rewardItems = p.branchRewards[idx - 1] or {}
+            EventTrigger.Delivery.ShowItemSelection("reward_branch")
+        else
+            -- back to required items selection
+            EventTrigger.Delivery.PromptRequiredItems()
+        end
     else
         -- reward items -> back to required items selection
         EventTrigger.Delivery.PromptRequiredItems()
@@ -1940,7 +2272,15 @@ function EventTriggerDeliveryItemSelect:prerender()
     self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
 
     local mode = EventTrigger.Delivery._selectionMode or "required"
-    local titleStr = (mode == "required") and "Set Required Items" or "Set Reward Items"
+    local titleStr
+    if mode == "required" then
+        titleStr = getText("UI_ET_Cfg_RequiredTitle")
+    elseif mode == "reward_branch" then
+        local p = EventTrigger.Delivery._setupPending
+        titleStr = getText("UI_ET_Cfg_BranchRewardTitle", p and (p._currentBranchIdx or 1) or 1)
+    else
+        titleStr = getText("UI_ET_Cfg_RewardTitle")
+    end
     self:drawTextCentre(titleStr, self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
 
     -- Left panel background (inventory list)
@@ -2016,6 +2356,29 @@ function EventTrigger.Delivery.PlacePending()
 
     local isEditing = p._editing
 
+    -- Build branches when multi-reward configured (需求2)
+    local branches = {}
+    if (p.branchCount or 1) > 1 then
+        local costOptions = {}
+        for _, r in ipairs(p.requiredItems or {}) do
+            if r.collect ~= false then
+                costOptions[#costOptions + 1] = {
+                    fullType = r.fullType,
+                    displayName = r.displayName,
+                    count = r.count,
+                }
+            end
+        end
+        for i = 1, p.branchCount do
+            branches[i] = {
+                id = i,
+                enabled = true,
+                costOptions = costOptions,
+                rewards = p.branchRewards[i] or {},
+            }
+        end
+    end
+
     local args = {
         x = p.x, y = p.y, z = p.z,
         hintText = p.hintText or "Delivery Point",
@@ -2026,11 +2389,13 @@ function EventTrigger.Delivery.PlacePending()
         cooldown = p.cooldown or { mode = EventTrigger.COOLDOWN_NONE },
         requiredItems = p.requiredItems or {},
         rewardItems = p.rewardItems or {},
+        branches = branches,
         creator = EventTrigger.GetCurrentPlayerId(),
     }
 
     dbg("PlacePending: placing delivery at (", p.x, p.y, p.z, "), hint=", p.hintText,
         " reqItems=", #args.requiredItems, " rewardItems=", #args.rewardItems,
+        " branches=", #args.branches,
         " matchMode=", args.matchMode, " cooldown=", EventTrigger.formatCooldown(args.cooldown),
         " editing=", tostring(isEditing))
 
@@ -2047,6 +2412,7 @@ function EventTrigger.Delivery.PlacePending()
             dp.cooldown = EventTrigger.makeCooldown(p.cooldown or { mode = EventTrigger.COOLDOWN_NONE })
             dp.requiredItems = p.requiredItems or {}
             dp.rewardItems = p.rewardItems or {}
+            dp.branches = branches
             if EventTrigger.IsMultiplayer() then
                 args.id = dp.id
                 args.triggerCount = dp.triggerCount or 0
@@ -2074,6 +2440,7 @@ function EventTrigger.Delivery.PlacePending()
             cooldown = EventTrigger.makeCooldown(p.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
             requiredItems = p.requiredItems or {},
             rewardItems = p.rewardItems or {},
+            branches = branches,
             playerDeliveries = {},
             playerCooldowns = {},
             enabled = true,
@@ -2100,6 +2467,7 @@ function EventTrigger.Delivery.PlacePending()
             cooldown = EventTrigger.makeCooldown(p.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
             requiredItems = p.requiredItems or {},
             rewardItems = p.rewardItems or {},
+            branches = branches,
             playerDeliveries = {},
             playerCooldowns = {},
             enabled = true,
@@ -2199,6 +2567,16 @@ function EventTrigger.Delivery.EditDelivery(dlvIdx, dp)
     if not dp then return end
     -- Close any existing selection UI
     EventTrigger.Delivery.CloseAllUIs()
+
+    -- Restore branch config when editing a multi-branch point
+    local branches = dp.branches or {}
+    local branchCount = #branches
+    if branchCount < 1 then branchCount = 1 end
+    local branchRewards = {}
+    for i, b in ipairs(branches) do
+        branchRewards[i] = EventTrigger.Delivery._cloneItems(b.rewards or {})
+    end
+
     -- Start edit wizard at delivery point position, pre-populated
     EventTrigger.Delivery._setupPending = {
         x = dp.x, y = dp.y, z = dp.z,
@@ -2210,6 +2588,9 @@ function EventTrigger.Delivery.EditDelivery(dlvIdx, dp)
         cooldown = EventTrigger.makeCooldown(dp.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
         requiredItems = EventTrigger.Delivery._cloneItems(dp.requiredItems or {}),
         rewardItems = EventTrigger.Delivery._cloneItems(dp.rewardItems or {}),
+        branchCount = branchCount,
+        branchRewards = branchRewards,
+        _currentBranchIdx = 1,
         _editing = true,
         _editId = dp.id,
         _editDlvIdx = dlvIdx,

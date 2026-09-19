@@ -400,6 +400,7 @@ Server.onClientCommand = function(module, command, player, args)
             requiredItems = args.requiredItems or {},
             rewardItems   = args.rewardItems or {},
             matchMode     = args.matchMode or "all",
+            branches      = args.branches or {},
             cooldown      = args.cooldown,
             playerDeliveries = {},
             playerCooldowns = {},
@@ -463,6 +464,7 @@ Server.onClientCommand = function(module, command, player, args)
                 if args.maxPerPlayer ~= nil then dp.maxPerPlayer = math.max(-1, args.maxPerPlayer) end
                 if args.requiredItems ~= nil then dp.requiredItems = args.requiredItems end
                 if args.rewardItems ~= nil then dp.rewardItems = args.rewardItems end
+                if args.branches ~= nil then dp.branches = args.branches end
                 if args.matchMode ~= nil then dp.matchMode = args.matchMode end
                 if args.cooldown ~= nil then dp.cooldown = Shared.makeCooldown(args.cooldown) end
                 Persistence.saveOneDeliveryPoint(dp)
@@ -545,9 +547,30 @@ Server.onClientCommand = function(module, command, player, args)
         end
 
         local pid = getPlayerId(player)
-        local matchMode = dp.matchMode or "all"
         local cooldown = dp.cooldown or {}
         local selectedORIndex = args.selectedORIndex
+
+        -- Resolve the effective exchange plan (branches if present, else legacy fields)
+        local costs, rewards, branchErr = Shared.resolveExchange(dp, args.branchId, args.costOptionIndex)
+        if branchErr then
+            sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
+                action = "failed", reason = branchErr,
+            })
+            return
+        end
+        -- Legacy ANY mode: narrow cost to the selected option
+        if #(dp.branches or {}) == 0 and (dp.matchMode or "all") == "any" then
+            local targetIdx = selectedORIndex or 1
+            costs = {}
+            local idx = 0
+            for _, req in ipairs(dp.requiredItems or {}) do
+                idx = idx + 1
+                if idx == targetIdx and req.collect ~= false then
+                    costs[1] = { fullType = req.fullType, count = req.count }
+                    break
+                end
+            end
+        end
 
         -- Batch count (N): positive integer, default 1, capped for safety
         local batchCount = tonumber(args.batchCount) or 1
@@ -593,28 +616,6 @@ Server.onClientCommand = function(module, command, player, args)
             end
         end
 
-        -- Build effective cost list (what to deduct this transaction)
-        local costs = {}
-        if matchMode == "any" then
-            local targetIdx = selectedORIndex or 1
-            local idx = 0
-            for _, req in ipairs(dp.requiredItems or {}) do
-                idx = idx + 1
-                if idx == targetIdx then
-                    if req.collect ~= false then
-                        costs[#costs + 1] = { fullType = req.fullType, count = req.count }
-                    end
-                    break
-                end
-            end
-        else
-            for _, req in ipairs(dp.requiredItems or {}) do
-                if req.collect ~= false then
-                    costs[#costs + 1] = { fullType = req.fullType, count = req.count }
-                end
-            end
-        end
-
         local items = inv:getItems()
         local function countOwned(fullType)
             local n = 0
@@ -656,7 +657,7 @@ Server.onClientCommand = function(module, command, player, args)
         -- Grant rewards (N x), rollback everything if any AddItem fails
         local grantedItems = {}
         local rewardFailed = false
-        for _, reward in ipairs(dp.rewardItems or {}) do
+        for _, reward in ipairs(rewards) do
             for _ = 1, reward.count * batchCount do
                 local newItem = inv:AddItem(reward.fullType)
                 if newItem then
