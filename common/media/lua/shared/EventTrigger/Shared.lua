@@ -320,23 +320,40 @@ end
 -- Resolve effective exchange plan for a delivery point + player selection.
 -- Returns costOptions (deduct list) + rewards, honoring branches when present.
 -- branchId: selected branch (1-based); costOptionIndex: selected cost option (1-based, 需求3)
+-- Resolve effective exchange plan for a delivery point + player selection.
+-- Returns qualifyItems (需求物品/资格门槛), costs (消耗扣除), rewards, err.
+--   qualifyItems: requiredItems — player MUST satisfy these (per matchMode) to exchange.
+--                 collect=true items are both a gate and a cost (legacy); collect=false are check-only gates.
+--   costs: items actually deducted (legacy = collect=true requiredItems; branch = selected cost option).
+--   rewards: granted items.
 EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
     dp = dp or {}
     local branches = dp.branches or {}
 
-    -- Legacy path: no branches
+    -- 资格门槛：requiredItems（collect 仅决定是否额外扣除，不决定是否参与门槛）
+    local qualifyItems = {}
+    for _, req in ipairs(dp.requiredItems or {}) do
+        qualifyItems[#qualifyItems + 1] = {
+            fullType = tostring(req.fullType or ""),
+            displayName = tostring(req.displayName or ""),
+            count = math.max(1, req.count or 1),
+            collect = req.collect ~= false,
+        }
+    end
+
+    -- Legacy path: no branches → consume = collect=true requiredItems
     if #branches == 0 then
-        local costOptions = {}
+        local costs = {}
         for _, req in ipairs(dp.requiredItems or {}) do
             if req.collect ~= false then
-                costOptions[#costOptions + 1] = {
+                costs[#costs + 1] = {
                     fullType = req.fullType,
                     displayName = req.displayName,
                     count = req.count,
                 }
             end
         end
-        return costOptions, dp.rewardItems or {}, nil
+        return qualifyItems, costs, dp.rewardItems or {}, nil
     end
 
     -- Branch path: pick the selected branch (default 1)
@@ -345,10 +362,22 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
         branch = branches[branchId]
     end
     if not branch or branch.enabled == false then
-        return nil, nil, "Branch unavailable"
+        return qualifyItems, nil, nil, "Branch unavailable"
     end
 
-    -- Within branch: pick cost option (需求3), else use first
+    -- Within branch: collect=true requiredItems are consumed ("移除"型需求物品),
+    -- plus the selected cost option (需求3, optional).
+    local costs = {}
+    for _, req in ipairs(dp.requiredItems or {}) do
+        if req.collect ~= false then
+            costs[#costs + 1] = {
+                fullType = req.fullType,
+                displayName = req.displayName,
+                count = req.count,
+            }
+        end
+    end
+
     local costOptions = branch.costOptions or {}
     local chosen
     if costOptionIndex and costOptions[costOptionIndex] then
@@ -356,12 +385,11 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
     elseif #costOptions > 0 then
         chosen = costOptions[1]
     end
-    if not chosen then
-        return nil, nil, "No cost option"
+    if chosen then
+        costs[#costs + 1] = chosen
     end
 
-    local deduct = { chosen }
-    return deduct, branch.rewards or {}, nil
+    return qualifyItems, costs, branch.rewards or {}, nil
 end
 
 -- Build delivery index file data

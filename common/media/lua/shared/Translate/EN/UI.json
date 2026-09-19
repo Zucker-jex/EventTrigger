@@ -98,8 +98,10 @@
     "UI_ET_Branch_Title": "Choose a Reward",
     "UI_ET_Branch_Option": "Option %1",
     "UI_ET_Branch_Cost": "Required items:",
+    "UI_ET_Branch_CostAlt": "Consume (choose one):",
     "UI_ET_Cfg_BranchCount": "Branch Count",
     "UI_ET_Cfg_BranchCountHint": "Number of reward branches (1 = single)",
+    "UI_ET_Cfg_CostTitle": "Set Consume Items",
     "UI_ET_Cfg_RequiredTitle": "Set Required Items",
     "UI_ET_Cfg_RewardTitle": "Set Reward Items",
     "UI_ET_Cfg_BranchRewardTitle": "Set Branch %1 Reward",
@@ -123,6 +125,8 @@
     "UI_ET_Dlv_MatchModeLabel": "Match Mode: %1",
     "UI_ET_Dlv_CooldownLabel": "Cooldown: %1",
     "UI_ET_Dlv_RequiredItems": "--- Required Items ---",
+    "UI_ET_Dlv_ConsumeItems": "--- Consume Items ---",
+    "UI_ET_Dlv_NoRequiredItems": "No required items in inventory!",
     "UI_ET_Dlv_RewardItems": "--- Reward Items ---",
     "UI_ET_Dlv_Completed": "Completed",
     "UI_ET_Dlv_Ready": "Ready",
@@ -144,7 +148,7 @@
     "UI_ET_Inv_Title": "Inventory",
     "UI_ET_Inv_Selected": "Selected",
     "UI_ET_Inv_Page": "Pg %1/%2",
-    "UI_ET_Inv_Collect": "Collect",
+    "UI_ET_Inv_Collect": "Consume",
     "UI_ET_Inv_Quantity": "Quantity of %1",
     "UI_ET_Inv_ItemQuantity": "Item Quantity",
     "UI_ET_Inv_Add": "Add",
@@ -154,7 +158,7 @@
     "UI_ET_Inv_NoneSelected": "(none selected)",
     "UI_ET_Inv_None": "(none)",
     "UI_ET_Inv_NoItems": "(no items)",
-    "UI_ET_Dlv_CollectSuffix": " (collect)",
+    "UI_ET_Dlv_CollectSuffix": " (consume)",
     "UI_ET_Dlv_CheckOnlySuffix": " (check only)",
 
     "UI_ET_Hist_DeliveryNotFound": "Delivery point not found.",
@@ -172,5 +176,9 @@
     "UI_ET_Hist_MaxPerPlayer": "Max Per Player: %1",
     "UI_ET_Hist_DeliveryDetails": "Delivery Point Details",
     "UI_ET_Hist_RequiredItems": "--- Required Items ---",
-    "UI_ET_Hist_RewardItems": "--- Reward Items ---"
+    "UI_ET_Hist_RewardItems": "--- Reward Items ---",
+
+    "UI_ET_CostOption_Title": "Choose Cost Item",
+    "UI_ET_CostOption_Reward": "Reward:",
+    "UI_ET_CostOption_None": "No available consume item"
 }

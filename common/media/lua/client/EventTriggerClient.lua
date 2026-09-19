@@ -23,13 +23,12 @@ do
     local expectedMethods = {
         "CheckPlayerInRange", "StartSetup", "EditDelivery", "DeleteDelivery",
         "ResetDelivery", "ShowHistory", "OnDeliveryResult",
-        "CloseAllUIs", "Validate", "Execute", "MatchItem", "CountItems",
+        "CloseAllUIs", "Validate", "MatchItem", "CountItems",
     }
 
     -- Stub return values so callers that expect (ok, msg) don't crash on nil.
     local stubFactories = {
         Validate   = function() return false, "Delivery module not loaded" end,
-        Execute    = function() return false, "Delivery module not loaded" end,
         MatchItem  = function() return false end,
         CountItems = function() return {} end,
     }
@@ -929,6 +928,10 @@ end
 -- SP: scan from square ModData, migrate from legacy Global if empty
 -- MP: request sync from server (server JSON files are authoritative)
 function EventTrigger.Load()
+    if not EventTrigger.IsMultiplayer() then
+        dbg("Load: single-player not supported, skipping")
+        return
+    end
     if EventTrigger.IsMultiplayer() then
         dbg("Load: MP mode, requesting sync from server...")
         EventTrigger.RequestSync()
@@ -1253,6 +1256,7 @@ EventTrigger._scanCounter = 0
 
 -- Per-frame execution: periodic scan (~5s), player distance check, timer expiry handling
 function EventTrigger.OnTick()
+    if not EventTrigger.IsMultiplayer() then return end
     EventTrigger.tickCounter = EventTrigger.tickCounter + 1
 
     EventTrigger._scanCounter = EventTrigger._scanCounter + 1
@@ -1324,6 +1328,7 @@ end
 -- Right-click world object menu: admin-only entries (place trigger + delivery point + manager)
 function EventTrigger.OnFillWorldObjectContextMenu(playerIndex, context, worldObjects, test)
     if test then return end
+    if not EventTrigger.IsMultiplayer() then return end
     local player = getSpecificPlayer(playerIndex)
     if not player then return end
 

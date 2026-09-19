@@ -98,8 +98,10 @@
     "UI_ET_Branch_Title": "选择奖励方案",
     "UI_ET_Branch_Option": "方案 %1",
     "UI_ET_Branch_Cost": "需求物品：",
+    "UI_ET_Branch_CostAlt": "消耗物品（任选其一）：",
     "UI_ET_Cfg_BranchCount": "方案数量",
     "UI_ET_Cfg_BranchCountHint": "奖励方案数量（1 = 单方案）",
+    "UI_ET_Cfg_CostTitle": "设置消耗物品",
     "UI_ET_Cfg_RequiredTitle": "设置需求物品",
     "UI_ET_Cfg_RewardTitle": "设置奖励物品",
     "UI_ET_Cfg_BranchRewardTitle": "设置方案 %1 奖励",
@@ -123,6 +125,8 @@
     "UI_ET_Dlv_MatchModeLabel": "匹配模式：%1",
     "UI_ET_Dlv_CooldownLabel": "冷却时间：%1",
     "UI_ET_Dlv_RequiredItems": "--- 需求物品 ---",
+    "UI_ET_Dlv_ConsumeItems": "--- 消耗物品 ---",
+    "UI_ET_Dlv_NoRequiredItems": "背包中没有需求物品！",
     "UI_ET_Dlv_RewardItems": "--- 奖励物品 ---",
     "UI_ET_Dlv_Completed": "已完成",
     "UI_ET_Dlv_Ready": "就绪",
@@ -144,7 +148,7 @@
     "UI_ET_Inv_Title": "背包",
     "UI_ET_Inv_Selected": "已选",
     "UI_ET_Inv_Page": "第 %1/%2 页",
-    "UI_ET_Inv_Collect": "收集",
+    "UI_ET_Inv_Collect": "移除",
     "UI_ET_Inv_Quantity": "%1 的数量",
     "UI_ET_Inv_ItemQuantity": "物品数量",
     "UI_ET_Inv_Add": "添加",
@@ -154,7 +158,7 @@
     "UI_ET_Inv_NoneSelected": "（未选择）",
     "UI_ET_Inv_None": "（无）",
     "UI_ET_Inv_NoItems": "（无物品）",
-    "UI_ET_Dlv_CollectSuffix": "（收集）",
+    "UI_ET_Dlv_CollectSuffix": "（移除）",
     "UI_ET_Dlv_CheckOnlySuffix": "（仅检查）",
 
     "UI_ET_Hist_DeliveryNotFound": "配送点未找到。",
@@ -172,5 +176,9 @@
     "UI_ET_Hist_MaxPerPlayer": "每人上限：%1",
     "UI_ET_Hist_DeliveryDetails": "配送点详情",
     "UI_ET_Hist_RequiredItems": "--- 需求物品 ---",
-    "UI_ET_Hist_RewardItems": "--- 奖励物品 ---"
+    "UI_ET_Hist_RewardItems": "--- 奖励物品 ---",
+
+    "UI_ET_CostOption_Title": "选择消耗物品",
+    "UI_ET_CostOption_Reward": "奖励：",
+    "UI_ET_CostOption_None": "无可用消耗物品"
 }

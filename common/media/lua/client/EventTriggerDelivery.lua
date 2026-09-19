@@ -21,6 +21,34 @@ local function fitText(text, font, maxWidth)
     return tostring(text or "")
 end
 
+-- Resolve the setup wizard's active item list for a selection mode.
+-- "required" = ET qualification items; "cost" = 需求3 consume options;
+-- "reward" / "reward_branch" = reward items.
+local function setupItemList(p, mode)
+    if not p then return {} end
+    if mode == "required" then return p.requiredItems or {} end
+    if mode == "cost" then return p.costOptions or {} end
+    return p.rewardItems or {}
+end
+
+-- Unified player identity key (username preferred, fallback to online ID).
+-- All delivery state (cooldown, limits, prompts) must use this same key,
+-- otherwise cooldown/limit records can silently desync when username is empty.
+local function playerKeyOf(player)
+    if not player then return "" end
+    local u = player:getUsername()
+    if u and #u > 0 then return u end
+    return tostring(player:getOnlineID()) or ""
+end
+
+-- Match key for dual matching (FullType + DisplayName). The displayName component
+-- distinguishes items that the player renamed via setName(); it is compared exactly
+-- on the CLIENT (strict pre-check). The server executes with FullType only (lenient
+-- authority, immune to per-player translation differences).
+local function itemKey(fullType, displayName)
+    return tostring(fullType or "") .. "|" .. tostring(displayName or "")
+end
+
 -- ============================================================
 -- Section 1: Dual Matching Algorithm (FullType + DisplayName)
 -- ============================================================
@@ -40,7 +68,7 @@ function EventTrigger.Delivery.CountItems(inventory, requiredItems)
         if item then
             for _, req in ipairs(requiredItems) do
                 if item:getFullType() == req.fullType and item:getDisplayName() == req.displayName then
-                    local key = req.fullType .. "|" .. req.displayName
+                    local key = itemKey(req.fullType, req.displayName)
                     counts[key] = (counts[key] or 0) + 1
                 end
             end
@@ -140,113 +168,56 @@ function EventTrigger.Delivery.GrantRewards(inventory, rewardItems, multiplier)
 end
 
 -- ============================================================
--- Full atomic delivery execution
--- ============================================================
-function EventTrigger.Delivery.Execute(player, deliveryData)
-    if not player or not deliveryData then return false, getText("UI_ET_Msg_InvalidData") end
-    local inventory = player:getInventory()
-    -- Branch-aware resolve: use selected branch's cost/reward
-    local requiredItems, rewardItems = EventTrigger.Delivery.resolveView(deliveryData)
-    local matchMode = deliveryData.matchMode or "all"
-    local selectedORIndex = deliveryData._selectedORItemIndex
-    local batchCount = tonumber(deliveryData._batchCount) or 1
-    if batchCount < 1 then batchCount = 1 end
-    batchCount = math.floor(batchCount)
-
-    -- Pre-check counts (FullType + DisplayName dual-match)
-    local counts = EventTrigger.Delivery.CountItems(inventory, requiredItems)
-    
-    if matchMode == "any" then
-        -- OR logic: player needs at least ONE of the required items (x batch)
-        local hasAny = false
-        for _, req in ipairs(requiredItems) do
-            local key = req.fullType .. "|" .. req.displayName
-            if (counts[key] or 0) >= req.count * batchCount then
-                hasAny = true
-                break
-            end
-        end
-        if not hasAny then
-            return false, getText("UI_ET_Msg_MissingItems")
-        end
-    else
-        -- AND logic (default): player needs ALL required items (x batch)
-        for _, req in ipairs(requiredItems) do
-            local key = req.fullType .. "|" .. req.displayName
-            if (counts[key] or 0) < req.count * batchCount then
-                return false, getText("UI_ET_Msg_MissingItems")
-            end
-        end
-    end
-
-    -- Check cooldown
-    local cooldownOk, cooldownMsg = EventTrigger.Delivery.CheckCooldown(player, deliveryData)
-    if not cooldownOk then
-        return false, cooldownMsg
-    end
-
-    -- Remove required items (batch)
-    local removedData = EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, selectedORIndex, batchCount)
-
-    -- Grant rewards (batch, with rollback on failure)
-    local granted = EventTrigger.Delivery.GrantRewards(inventory, rewardItems, batchCount)
-    if not granted then
-        -- Rollback removed items
-        for _, data in ipairs(removedData) do
-            local instance = inventory:AddItem(data.fullType)
-            if instance and data.displayName and #data.displayName > 0 then
-                instance:setName(data.displayName)
-            end
-        end
-        return false, getText("UI_ET_Msg_NotEnoughSpace")
-    end
-
-    return true, getText("UI_ET_Msg_DeliveryCompleted")
-end
-
--- ============================================================
 -- Client-side dual-match validation (no inventory changes)
 -- ============================================================
 function EventTrigger.Delivery.Validate(player, deliveryData)
     if not player or not deliveryData then return false, getText("UI_ET_Msg_InvalidData") end
     local inventory = player:getInventory()
-    -- Branch-aware resolve: use selected branch's cost/reward
-    local requiredItems, _ = EventTrigger.Delivery.resolveView(deliveryData)
-    local matchMode = deliveryData.matchMode or "all"
+    -- Branch-aware resolve: 需求物品门槛 + 消耗 + 奖励 + matchMode
+    local qualifyItems, costItems, _, matchMode = EventTrigger.Delivery.resolveView(deliveryData)
     local batchCount = tonumber(deliveryData._batchCount) or 1
     if batchCount < 1 then batchCount = 1 end
     batchCount = math.floor(batchCount)
-    local counts = EventTrigger.Delivery.CountItems(inventory, requiredItems)
-    
-    if matchMode == "any" then
-        -- OR logic: player needs at least ONE of the required items (x batch)
-        local hasAny = false
-        for _, req in ipairs(requiredItems) do
-            local key = req.fullType .. "|" .. req.displayName
-            if (counts[key] or 0) >= req.count * batchCount then
-                hasAny = true
-                break
+
+    -- 资格门槛检查（需求物品）：collect=true 按 batch 计，collect=false 只查持有
+    if #qualifyItems > 0 then
+        local qualCounts = EventTrigger.Delivery.CountItems(inventory, qualifyItems)
+        if matchMode == "any" then
+            local hasAny = false
+            for _, q in ipairs(qualifyItems) do
+                local need = q.collect and (q.count * batchCount) or q.count
+                if (qualCounts[itemKey(q.fullType, q.displayName)] or 0) >= need then
+                    hasAny = true
+                    break
+                end
+            end
+            if not hasAny then return false, getText("UI_ET_Msg_MissingItems") end
+        else
+            for _, q in ipairs(qualifyItems) do
+                local need = q.collect and (q.count * batchCount) or q.count
+                if (qualCounts[itemKey(q.fullType, q.displayName)] or 0) < need then
+                    return false, getText("UI_ET_Msg_MissingItems")
+                end
             end
         end
-        if not hasAny then
-            return false, getText("UI_ET_Msg_MissingItems")
-        end
-    else
-        -- AND logic (default): player needs ALL required items (x batch)
-        for _, req in ipairs(requiredItems) do
-            local key = req.fullType .. "|" .. req.displayName
-            if (counts[key] or 0) < req.count * batchCount then
+    end
+
+    -- 消耗检查（实际扣款）
+    if #costItems > 0 then
+        local costCounts = EventTrigger.Delivery.CountItems(inventory, costItems)
+        for _, c in ipairs(costItems) do
+            if (costCounts[itemKey(c.fullType, c.displayName)] or 0) < c.count * batchCount then
                 return false, getText("UI_ET_Msg_MissingItems")
             end
         end
     end
-    
+
     -- Check cooldown
     local cooldownOk, cooldownMsg = EventTrigger.Delivery.CheckCooldown(player, deliveryData)
     if not cooldownOk then
         return false, cooldownMsg
     end
-    
+
     return true, ""
 end
 
@@ -259,7 +230,7 @@ function EventTrigger.Delivery.CheckCooldown(player, deliveryData)
         return true, ""
     end
 
-    local playerKey = player:getUsername() or tostring(player:getOnlineID())
+    local playerKey = playerKeyOf(player)
     local playerCooldowns = deliveryData.playerCooldowns or {}
     local lastDelivery = playerCooldowns[playerKey]
     if not lastDelivery then
@@ -290,7 +261,7 @@ end
 
 function EventTrigger.Delivery.CheckPlayerInRange(player)
     if not player then return end
-    local playerKey = player:getUsername() or tostring(player:getOnlineID())
+    local playerKey = playerKeyOf(player)
     if not playerKey or #playerKey == 0 then return end
 
     local px, py, pz = player:getX(), player:getY(), player:getZ()
@@ -393,22 +364,24 @@ end
 function EventTriggerDeliveryPrompt:onYes()
     self:close()
     local player = getPlayer()
-    local playerKey = player and (player:getUsername() or "")
+    local playerKey = playerKeyOf(player)
     if playerKey then
         EventTrigger.Delivery._activePrompt[playerKey] = nil
     end
     if player and self.dp then
+        EventTrigger.Delivery.ClearSelection(self.dp)
         EventTrigger.Delivery.ShowDeliveryConfirm(player, self.dp)
     end
 end
 
 function EventTriggerDeliveryPrompt:onNo()
     local player = getPlayer()
-    local playerKey = player and (player:getUsername() or "")
+    local playerKey = playerKeyOf(player)
     if playerKey then
         EventTrigger.Delivery._activePrompt[playerKey] = nil
         EventTrigger.Delivery._pendingDpId[playerKey] = nil
     end
+    EventTrigger.Delivery.ClearSelection(self.dp)
     self:close()
 end
 
@@ -462,11 +435,52 @@ function EventTriggerDeliveryPrompt:prerender()
         end
         y = y + math.floor(22 * EventTrigger.US)
     end
+
+    -- 需求物品显示：配置了才显示；背包缺失时提示
+    local reqItems = self.dp and (self.dp.requiredItems or {}) or {}
+    if #reqItems > 0 then
+        y = y + math.floor(4 * EventTrigger.US)
+        self:drawText(getText("UI_ET_Dlv_RequiredItems"), 16, y, 0.9, 0.7, 0.3, 1, UIFont.Small)
+        y = y + math.floor(20 * EventTrigger.US)
+
+        local player = getPlayer()
+        local inv = player and player:getInventory()
+        local counts = inv and EventTrigger.Delivery.CountItems(inv, reqItems) or {}
+        local matchMode = self.dp and (self.dp.matchMode or "all") or "all"
+        local qualifyOk = true
+        if matchMode == "any" then
+            qualifyOk = false
+            for _, req in ipairs(reqItems) do
+                if (counts[itemKey(req.fullType, req.displayName)] or 0) >= (req.count or 1) then qualifyOk = true; break end
+            end
+        else
+            for _, req in ipairs(reqItems) do
+                if (counts[itemKey(req.fullType, req.displayName)] or 0) < (req.count or 1) then qualifyOk = false; break end
+            end
+        end
+        for _, req in ipairs(reqItems) do
+            local have = counts[itemKey(req.fullType, req.displayName)] or 0
+            local suffix = (req.collect ~= false) and getText("UI_ET_Dlv_CollectSuffix") or getText("UI_ET_Dlv_CheckOnlySuffix")
+            local txt = fitText((req.displayName or "?") .. "  x" .. tostring(req.count) .. suffix .. "  [" .. getText("UI_ET_Batch_Have") .. " " .. have .. "]", UIFont.Small, self.width - 48)
+            self:drawText(txt, 24, y, 1, 1, 1, 1, UIFont.Small)
+            y = y + math.floor(20 * EventTrigger.US)
+        end
+        if not qualifyOk then
+            self:drawText(getText("UI_ET_Dlv_NoRequiredItems"), 24, y, 0.9, 0.5, 0.5, 1, UIFont.Small)
+        end
+    end
 end
 
 function EventTriggerDeliveryPrompt:new(dp)
     local w = EventTrigger.fitW(460)
-    local h = EventTrigger.fitH(230)
+    local s = EventTrigger.US
+    local reqCount = dp and #(dp.requiredItems or {}) or 0
+    local baseH = 230
+    if reqCount > 0 then
+        -- 标题行 + 每项一行 + 缺失提示一行
+        baseH = baseH + math.floor(20 * s) * (reqCount + 2) + math.floor(26 * s)
+    end
+    local h = EventTrigger.fitH(baseH)
     local sw = getCore():getScreenWidth()
     local sh = getCore():getScreenHeight()
     local x, y = (sw - w) / 2, (sh - h) / 2
@@ -488,13 +502,38 @@ end
 -- ============================================================
 
 -- Resolve the display/execution plan for a delivery (branch-aware).
--- Returns costItems (deduct list) + rewardItems + effective branch.
+-- Returns qualifyItems (需求物品/资格门槛) + costItems (消耗) + rewardItems + effective matchMode.
+--   qualifyItems: requiredItems — the qualification gate (collect=true also consumes in legacy).
+--   costItems: items actually deducted (legacy = collect=true requiredItems; branch = selected cost option).
+--   branch: single selected cost item + branch rewards + "all" (choice already made).
 function EventTrigger.Delivery.resolveView(delivery)
     local branches = delivery.branches or {}
 
-    -- Legacy path
+    -- 资格门槛：requiredItems（需求物品）
+    local qualifyItems = {}
+    for _, req in ipairs(delivery.requiredItems or {}) do
+        qualifyItems[#qualifyItems + 1] = {
+            fullType = req.fullType,
+            displayName = req.displayName,
+            count = req.count,
+            collect = req.collect ~= false,
+        }
+    end
+
+    -- Legacy path: 消耗 = requiredItems 中 collect=true 的
     if #branches == 0 then
-        return (delivery.requiredItems or {}), (delivery.rewardItems or {})
+        local costItems = {}
+        for _, req in ipairs(delivery.requiredItems or {}) do
+            if req.collect ~= false then
+                costItems[#costItems + 1] = {
+                    fullType = req.fullType,
+                    displayName = req.displayName,
+                    count = req.count,
+                    collect = true,
+                }
+            end
+        end
+        return qualifyItems, costItems, (delivery.rewardItems or {}), (delivery.matchMode or "all")
     end
 
     -- Branch path
@@ -504,19 +543,50 @@ function EventTrigger.Delivery.resolveView(delivery)
         branch = branches[bid]
     end
     if not branch or branch.enabled == false then
-        return {}, {}
+        return qualifyItems, {}, {}, "all"
     end
 
+    -- 消耗 = requiredItems 中 collect=true 的（"移除"型需求物品）
     local costItems = {}
-    for _, co in ipairs(branch.costOptions or {}) do
+    for _, req in ipairs(delivery.requiredItems or {}) do
+        if req.collect ~= false then
+            costItems[#costItems + 1] = {
+                fullType = req.fullType,
+                displayName = req.displayName,
+                count = req.count,
+                collect = true,
+            }
+        end
+    end
+
+    -- 额外消耗：branch 选中的 costOption（需求3，可选）
+    local costOptions = branch.costOptions or {}
+    local chosen
+    local chosenIdx = delivery._selectedCostOptionIndex
+    if chosenIdx and costOptions[chosenIdx] then
+        chosen = costOptions[chosenIdx]
+    elseif #costOptions > 0 then
+        chosen = costOptions[1]
+    end
+    if chosen then
         costItems[#costItems + 1] = {
-            fullType = co.fullType,
-            displayName = co.displayName,
-            count = co.count,
+            fullType = chosen.fullType,
+            displayName = chosen.displayName,
+            count = chosen.count,
             collect = true,
         }
     end
-    return costItems, (branch.rewards or {})
+    return qualifyItems, costItems, (branch.rewards or {}), "all"
+end
+
+-- Clear per-delivery transient selection state (branch / cost option / OR index).
+-- These are runtime-only; leftover values would skip selection dialogs on the next
+-- trigger and make player-facing behavior inconsistent.
+function EventTrigger.Delivery.ClearSelection(delivery)
+    if not delivery then return end
+    delivery._selectedBranchId = nil
+    delivery._selectedCostOptionIndex = nil
+    delivery._selectedORItemIndex = nil
 end
 
 function EventTrigger.Delivery.ShowDeliveryConfirm(player, delivery)
@@ -542,6 +612,20 @@ function EventTrigger.Delivery.ShowDeliveryConfirm(player, delivery)
     -- Single branch: preselect it
     if #branches == 1 then
         delivery._selectedBranchId = branches[1].id
+    end
+
+    -- 需求3: multiple cost options → cost option selection first.
+    -- Skip if already chosen (avoids re-showing the selector).
+    if #branches >= 1 then
+        local branch = branches[delivery._selectedBranchId] or branches[1]
+        local costOptions = branch and (branch.costOptions or {}) or {}
+        if #costOptions > 1 then
+            local chosenIdx = delivery._selectedCostOptionIndex
+            if not chosenIdx or not costOptions[chosenIdx] then
+                EventTrigger.Delivery.ShowCostOptionSelect(player, delivery)
+                return
+            end
+        end
     end
 
     -- Legacy ANY mode with multiple collect items → item selection
@@ -612,57 +696,41 @@ function EventTrigger.Delivery.FinalizeDelivery(player, delivery, batchCount)
     if batchCount < 1 then batchCount = 1 end
     batchCount = math.floor(batchCount)
 
-    local playerKey = player:getUsername() or ""
+    local playerKey = playerKeyOf(player)
     EventTrigger.Delivery._activePrompt[playerKey] = nil
     EventTrigger.Delivery._pendingDpId[playerKey] = nil
 
-    -- Determine selectedORIndex for OR mode
+    -- Determine selectedORIndex for legacy ANY mode ONLY.
+    -- Branch mode resolves a single cost item inside resolveView(), so deriving
+    -- an OR index here would desync from the 1-item cost list and could result
+    -- in "no item deducted but reward granted".
+    local branches = delivery.branches or {}
     local matchMode = delivery.matchMode or "all"
-    local selectedORIndex = delivery._selectedORItemIndex
-    if matchMode == "any" and not selectedORIndex then
-        -- Single collect item in ANY mode: pick it automatically
-        for idx, req in ipairs(delivery.requiredItems or {}) do
-            if req.collect ~= false then
-                selectedORIndex = idx
-                break
+    local selectedORIndex = nil
+    if #branches == 0 and matchMode == "any" then
+        selectedORIndex = delivery._selectedORItemIndex
+        if not selectedORIndex then
+            for idx, req in ipairs(delivery.requiredItems or {}) do
+                if req.collect ~= false then
+                    selectedORIndex = idx
+                    break
+                end
             end
         end
     end
 
     delivery._batchCount = batchCount
 
-    if EventTrigger.IsMultiplayer() then
-        local ok, msg = EventTrigger.Delivery.Validate(player, delivery)
-        if not ok then
-            HaloTextHelper.addBadText(player, msg)
-            return
-        end
-        local args = { id = delivery.id, batchCount = batchCount }
-        if selectedORIndex then args.selectedORIndex = selectedORIndex end
-        if delivery._selectedBranchId then args.branchId = delivery._selectedBranchId end
-        if delivery._selectedCostOptionIndex then args.costOptionIndex = delivery._selectedCostOptionIndex end
-        sendClientCommand("EventTrigger", "confirmDelivery", args)
-    else
-        if selectedORIndex then delivery._selectedORItemIndex = selectedORIndex end
-        local ok, msg = EventTrigger.Delivery.Execute(player, delivery)
-        if ok then
-            HaloTextHelper.addGoodText(player, msg)
-            delivery.triggerCount = (delivery.triggerCount or 0) + batchCount
-            if not delivery.triggeredBy then delivery.triggeredBy = {} end
-            if not delivery.playerDeliveries then delivery.playerDeliveries = {} end
-            delivery.playerDeliveries[playerKey] = (delivery.playerDeliveries[playerKey] or 0) + batchCount
-            local cd = delivery.cooldown or {}
-            if not EventTrigger.isCooldownZero(cd) then
-                if not delivery.playerCooldowns then delivery.playerCooldowns = {} end
-                delivery.playerCooldowns[playerKey] = EventTrigger.cooldownNowSeconds(cd.mode)
-            end
-            local ts, tsStr = EventTrigger.GetTimestamp()
-            table.insert(delivery.triggeredBy, { playerId = playerKey, timestamp = ts, timeStr = tsStr })
-            EventTrigger._saveToModData()
-        else
-            HaloTextHelper.addBadText(player, msg)
-        end
+    local ok, msg = EventTrigger.Delivery.Validate(player, delivery)
+    if not ok then
+        HaloTextHelper.addBadText(player, msg)
+        return
     end
+    local args = { id = delivery.id, batchCount = batchCount }
+    if selectedORIndex then args.selectedORIndex = selectedORIndex end
+    if delivery._selectedBranchId then args.branchId = delivery._selectedBranchId end
+    if delivery._selectedCostOptionIndex then args.costOptionIndex = delivery._selectedCostOptionIndex end
+    sendClientCommand("EventTrigger", "confirmDelivery", args)
 end
 
 function EventTriggerDeliveryConfirm:onConfirm()
@@ -685,11 +753,12 @@ end
 
 function EventTriggerDeliveryConfirm:onCancel()
     local player = getPlayer()
-    local playerKey = player and (player:getUsername() or "")
+    local playerKey = playerKeyOf(player)
     if playerKey then
         EventTrigger.Delivery._activePrompt[playerKey] = nil
         EventTrigger.Delivery._pendingDpId[playerKey] = nil
     end
+    EventTrigger.Delivery.ClearSelection(self.delivery)
     self:close()
 end
 
@@ -739,65 +808,72 @@ function EventTriggerDeliveryConfirm:prerender()
 
     local s = EventTrigger.US
     local rowH = math.floor(20 * s)
-    local midX = self.width / 2
-    local leftX = 16
-    local rightX = midX + 16
-    local reqColW = midX - leftX - 20
-    local rewColW = self.width - rightX - 20
     local y = self.itemY
 
-    -- Show match mode and cooldown info (only for legacy path)
+    -- Top info: match mode (legacy only) + cooldown
     local branches = delivery.branches or {}
     if #branches == 0 then
         local modeStr = (delivery.matchMode == "any") and getText("UI_ET_Dlv_Any") or getText("UI_ET_Dlv_All")
         local modeText = getText("UI_ET_Dlv_MatchModeLabel", modeStr)
-        self:drawText(modeText, leftX, y, 0.9, 0.9, 0.3, 1, UIFont.Small)
+        self:drawText(modeText, 16, y, 0.9, 0.9, 0.3, 1, UIFont.Small)
         y = y + rowH
     end
 
     local cd = delivery.cooldown or {}
     if not EventTrigger.isCooldownZero(cd) then
         local cdText = getText("UI_ET_Dlv_CooldownLabel", EventTrigger.formatCooldown(cd))
-        self:drawText(cdText, leftX, y, 0.7, 0.9, 0.7, 1, UIFont.Small)
+        self:drawText(cdText, 16, y, 0.7, 0.9, 0.7, 1, UIFont.Small)
         y = y + rowH
     end
 
-    -- Resolve the effective cost/reward for display (branch-aware)
-    local reqItems, rewItems = EventTrigger.Delivery.resolveView(delivery)
+    -- Resolve the effective plan: 需求物品 / 消耗物品 / 奖励
+    local qualifyItems, costItems, rewItems = EventTrigger.Delivery.resolveView(delivery)
 
-    -- Left: Required Items
-    self:drawText(getText("UI_ET_Dlv_RequiredItems"), leftX, y, 0.9, 0.7, 0.3, 1, UIFont.Small)
-    y = y + rowH
-    if #reqItems == 0 then
-        self:drawText(getText("UI_ET_Inv_None"), leftX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
-    else
-        for _, req in ipairs(reqItems) do
-            local collectStr = (req.collect ~= false) and getText("UI_ET_Dlv_CollectSuffix") or getText("UI_ET_Dlv_CheckOnlySuffix")
-            local txt = fitText(req.displayName .. "  x" .. tostring(req.count) .. collectStr, UIFont.Small, reqColW)
-            local color = (req.collect ~= false) and {1, 1, 1} or {0.7, 0.9, 0.7}
-            self:drawText(txt, leftX + 8, y, color[1], color[2], color[3], 1, UIFont.Small)
-            y = y + rowH
-            if y > self.height - 70 then break end
+    -- Assemble columns: 需求(若有) + 消耗(若有) + 奖励(始终)
+    local columns = {}
+    if #qualifyItems > 0 then
+        columns[#columns + 1] = { title = getText("UI_ET_Dlv_RequiredItems"), items = qualifyItems, isQualify = true, color = {0.9, 0.7, 0.3} }
+    end
+    if #costItems > 0 then
+        columns[#columns + 1] = { title = getText("UI_ET_Dlv_ConsumeItems"), items = costItems, isQualify = false, color = {0.9, 0.5, 0.5} }
+    end
+    columns[#columns + 1] = { title = getText("UI_ET_Dlv_RewardItems"), items = rewItems, isQualify = false, color = {0.3, 0.9, 0.5} }
+
+    local n = #columns
+    local margin = 16
+    local gap = 12
+    local colW = math.floor((self.width - margin * 2 - gap * (n - 1)) / n)
+    if colW < 60 then colW = 60 end
+
+    local headerY = y
+    for ci, col in ipairs(columns) do
+        local cx = margin + (ci - 1) * (colW + gap)
+        local cy = headerY
+        self:drawText(col.title, cx, cy, col.color[1], col.color[2], col.color[3], 1, UIFont.Small)
+        cy = cy + rowH
+
+        -- 列分隔线（非首列）
+        if ci > 1 then
+            self:drawRect(cx - gap / 2 - 1, headerY, 1, self.height - headerY - 70, 0.4, 0.4, 0.4, 0.4)
+        end
+
+        if #col.items == 0 then
+            self:drawText(getText("UI_ET_Inv_None"), cx + 8, cy, 0.5, 0.5, 0.5, 1, UIFont.Small)
+        else
+            for _, it in ipairs(col.items) do
+                local txt
+                if col.isQualify then
+                    local suffix = (it.collect ~= false) and getText("UI_ET_Dlv_CollectSuffix") or getText("UI_ET_Dlv_CheckOnlySuffix")
+                    txt = fitText((it.displayName or "?") .. "  x" .. tostring(it.count) .. suffix, UIFont.Small, colW - 20)
+                else
+                    txt = fitText((it.displayName or "?") .. "  x" .. tostring(it.count), UIFont.Small, colW - 20)
+                end
+                self:drawText(txt, cx + 8, cy, 1, 1, 1, 1, UIFont.Small)
+                cy = cy + rowH
+                if cy > self.height - 70 then break end
+            end
         end
     end
-
-    -- Right: Reward Items
-    y = self.itemY
-    self:drawText(getText("UI_ET_Dlv_RewardItems"), rightX, y, 0.3, 0.9, 0.5, 1, UIFont.Small)
-    y = y + rowH
-    if #rewItems == 0 then
-        self:drawText(getText("UI_ET_Inv_None"), rightX + 8, y, 0.5, 0.5, 0.5, 1, UIFont.Small)
-    else
-        for _, rew in ipairs(rewItems) do
-            local txt = fitText(rew.displayName .. "  x" .. tostring(rew.count), UIFont.Small, rewColW)
-            self:drawText(txt, rightX + 8, y, 1, 1, 1, 1, UIFont.Small)
-            y = y + rowH
-            if y > self.height - 70 then break end
-        end
-    end
-
-    -- Vertical divider
-    self:drawRect(midX, self.itemY, 1, self.height - self.itemY - 70, 0.4, 0.4, 0.4, 0.4)
 end
 
 function EventTriggerDeliveryConfirm:new(player, delivery)
@@ -846,24 +922,21 @@ function EventTriggerBatchCountPrompt:computeCosts()
     self.costItems = {}
     self.maxN = nil
     local inv = self.player:getInventory()
-    local reqItems, rewardItems = EventTrigger.Delivery.resolveView(self.delivery)
+    local _, costItems, rewardItems = EventTrigger.Delivery.resolveView(self.delivery)
     self.rewardItems = rewardItems
-    local counts = EventTrigger.Delivery.CountItems(inv, reqItems)
-    for _, req in ipairs(reqItems) do
-        if req.collect ~= false then
-            local key = req.fullType .. "|" .. req.displayName
-            local have = counts[key] or 0
-            local maxForThis = math.floor(have / (req.count or 1))
-            if self.maxN == nil or maxForThis < self.maxN then
-                self.maxN = maxForThis
-            end
-            self.costItems[#self.costItems + 1] = {
-                fullType = req.fullType,
-                displayName = req.displayName,
-                count = req.count,
-                have = have,
-            }
+    local counts = EventTrigger.Delivery.CountItems(inv, costItems)
+    for _, req in ipairs(costItems) do
+        local have = counts[itemKey(req.fullType, req.displayName)] or 0
+        local maxForThis = math.floor(have / (req.count or 1))
+        if self.maxN == nil or maxForThis < self.maxN then
+            self.maxN = maxForThis
         end
+        self.costItems[#self.costItems + 1] = {
+            fullType = req.fullType,
+            displayName = req.displayName,
+            count = req.count,
+            have = have,
+        }
     end
     if self.maxN == nil or self.maxN < 1 then self.maxN = 1 end
     self.entryValue = 1
@@ -941,11 +1014,12 @@ end
 
 function EventTriggerBatchCountPrompt:onCancel()
     local player = self.player
-    local playerKey = player and (player:getUsername() or "")
+    local playerKey = playerKeyOf(player)
     if playerKey then
         EventTrigger.Delivery._activePrompt[playerKey] = nil
         EventTrigger.Delivery._pendingDpId[playerKey] = nil
     end
+    EventTrigger.Delivery.ClearSelection(self.delivery)
     self:close()
 end
 
@@ -1152,11 +1226,12 @@ end
 
 function EventTriggerBranchSelectPrompt:onCancel()
     local player = self.player
-    local playerKey = player and (player:getUsername() or "")
+    local playerKey = playerKeyOf(player)
     if playerKey then
         EventTrigger.Delivery._activePrompt[playerKey] = nil
         EventTrigger.Delivery._pendingDpId[playerKey] = nil
     end
+    EventTrigger.Delivery.ClearSelection(self.delivery)
     self:close()
 end
 
@@ -1212,8 +1287,15 @@ function EventTriggerBranchSelectPrompt:prerender()
 
     local leftX = 24
 
-    -- Cost (required items) display
-    self:drawText(getText("UI_ET_Branch_Cost"), leftX, self.costHeaderY, 0.9, 0.7, 0.3, 1, UIFont.Small)
+    -- Cost display: multiple costOptions are mutually-exclusive (choose one);
+    -- a single costOption is a fixed requirement. Make the label match the semantics.
+    local costLabel
+    if #self.costOptions > 1 then
+        costLabel = getText("UI_ET_Branch_CostAlt")
+    else
+        costLabel = getText("UI_ET_Branch_Cost")
+    end
+    self:drawText(costLabel, leftX, self.costHeaderY, 0.9, 0.7, 0.3, 1, UIFont.Small)
     local costY = self.costItemsY
     if #self.costOptions == 0 then
         self:drawText(getText("UI_ET_Inv_None"), leftX + 8, costY, 0.5, 0.5, 0.5, 1, UIFont.Small)
@@ -1254,6 +1336,228 @@ end
 
 function EventTriggerBranchSelectPrompt:new(player, delivery)
     local w = EventTrigger.fitW(600)
+    local h = EventTrigger.fitH(480)
+    local sw = getCore():getScreenWidth()
+    local sh = getCore():getScreenHeight()
+    local x, y = (sw - w) / 2, (sh - h) / 2
+
+    local o = ISPanel:new(x, y, w, h)
+    setmetatable(o, self)
+    self.__index = self
+    o.borderColor = { r = 0.5, g = 0.5, b = 0.5, a = 1 }
+    o.backgroundColor = { r = 0, g = 0, b = 0, a = 0.9 }
+    o.width = w
+    o.height = h
+    o.player = player
+    o.delivery = delivery
+    o.dragging = false
+    return o
+end
+
+-- ============================================================
+-- Cost Option Selection UI (需求3: same reward, multiple consume choices)
+-- ============================================================
+EventTrigger.Delivery._costOptionSelectUI = nil
+
+function EventTrigger.Delivery.ShowCostOptionSelect(player, delivery)
+    if EventTrigger.Delivery._costOptionSelectUI then
+        EventTrigger.Delivery._costOptionSelectUI:close()
+    end
+    local ui = EventTriggerCostOptionSelectPrompt:new(player, delivery)
+    ui:initialise()
+    ui:addToUIManager()
+    EventTrigger.Delivery._costOptionSelectUI = ui
+end
+
+EventTriggerCostOptionSelectPrompt = ISPanel:derive("EventTriggerCostOptionSelectPrompt")
+
+function EventTriggerCostOptionSelectPrompt:initialise()
+    ISPanel.initialise(self)
+    self:create()
+end
+
+function EventTriggerCostOptionSelectPrompt:create()
+    self:setAlwaysOnTop(true)
+
+    self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerCostOptionSelectPrompt.onCancel)
+    self.closeBtn:initialise()
+    self:addChild(self.closeBtn)
+
+    local s = EventTrigger.US
+    self.rowH = math.floor(30 * s)
+    self.radioSize = 18
+    self.selectedIndex = nil
+
+    -- Resolve the selected branch
+    local branches = self.delivery.branches or {}
+    self.branch = branches[self.delivery._selectedBranchId] or branches[1]
+
+    -- Build available cost options (only those the player owns, filtered)
+    self.costOptions = self.branch and (self.branch.costOptions or {}) or {}
+    self.ownedOptions = {}
+    local player = self.player
+    local inv = player and player:getInventory()
+    if inv then
+        local counts = EventTrigger.Delivery.CountItems(inv, self.costOptions)
+        for idx, co in ipairs(self.costOptions) do
+            local have = counts[itemKey(co.fullType, co.displayName)] or 0
+            if have > 0 then
+                self.ownedOptions[#self.ownedOptions + 1] = {
+                    idx = idx,
+                    co = co,
+                    have = have,
+                }
+            end
+        end
+    end
+
+    self.costHeaderY = 28 + math.floor(18 * s)
+    self.costItemsY = self.costHeaderY + self.rowH
+    local rewItems = self.branch and (self.branch.rewards or {}) or {}
+    self.rewCount = math.max(1, #rewItems)
+    self.listStartY = self.costItemsY + self.rewCount * self.rowH + math.floor(8 * s)
+
+    local bh = math.floor(34 * s)
+    local gap = 16
+    self.btnY = self.height - bh - 16
+    local confirmLabel = getText("UI_ET_Btn_Confirm")
+    local cancelLabel = getText("UI_ET_Btn_Cancel")
+    local confirmW = EventTrigger.btnW(confirmLabel)
+    local cancelW = EventTrigger.btnW(cancelLabel)
+    local totalW = confirmW + gap + cancelW
+    local bx = (self.width - totalW) / 2
+
+    self.confirmBtn = ISButton:new(bx, self.btnY, confirmW, bh, confirmLabel, self, EventTriggerCostOptionSelectPrompt.onOk)
+    self.confirmBtn:initialise()
+    self:addChild(self.confirmBtn)
+    bx = bx + confirmW + gap
+
+    self.cancelBtn = ISButton:new(bx, self.btnY, cancelW, bh, cancelLabel, self, EventTriggerCostOptionSelectPrompt.onCancel)
+    self.cancelBtn:initialise()
+    self:addChild(self.cancelBtn)
+
+    self:updateConfirmState()
+end
+
+function EventTriggerCostOptionSelectPrompt:updateConfirmState()
+    self.confirmBtn:setEnable(self.selectedIndex ~= nil)
+end
+
+function EventTriggerCostOptionSelectPrompt:onOk()
+    if not self.selectedIndex then
+        HaloTextHelper.addBadText(self.player, getText("UI_ET_Msg_PleaseSelect"))
+        return
+    end
+    local opt = self.ownedOptions[self.selectedIndex]
+    self.delivery._selectedCostOptionIndex = opt.idx
+    self:close()
+    EventTrigger.Delivery.ShowDeliveryConfirm(self.player, self.delivery)
+end
+
+function EventTriggerCostOptionSelectPrompt:onCancel()
+    local player = self.player
+    local playerKey = playerKeyOf(player)
+    if playerKey then
+        EventTrigger.Delivery._activePrompt[playerKey] = nil
+        EventTrigger.Delivery._pendingDpId[playerKey] = nil
+    end
+    EventTrigger.Delivery.ClearSelection(self.delivery)
+    self:close()
+end
+
+function EventTriggerCostOptionSelectPrompt:close()
+    if EventTrigger.Delivery._costOptionSelectUI == self then
+        EventTrigger.Delivery._costOptionSelectUI = nil
+    end
+    self:setVisible(false)
+    self:removeFromUIManager()
+end
+
+function EventTriggerCostOptionSelectPrompt:onMouseDown(x, y)
+    if y >= 0 and y < 28 then
+        self.dragging = true
+        self.dragOfsX = getMouseX() - self.x
+        self.dragOfsY = getMouseY() - self.y
+        self:setCapture(true)
+        return true
+    end
+    for idx = 1, #self.ownedOptions do
+        local iy = self.listStartY + (idx - 1) * self.rowH
+        if y >= iy and y < iy + self.rowH then
+            self.selectedIndex = idx
+            self:updateConfirmState()
+            return true
+        end
+    end
+    return ISPanel.onMouseDown(self, x, y)
+end
+
+function EventTriggerCostOptionSelectPrompt:onMouseMove(x, y)
+    if self.dragging then
+        self:setX(getMouseX() - self.dragOfsX)
+        self:setY(getMouseY() - self.dragOfsY)
+        return true
+    end
+end
+
+function EventTriggerCostOptionSelectPrompt:onMouseUp(x, y)
+    if self.dragging then
+        self.dragging = false
+        self:setCapture(false)
+        return true
+    end
+end
+
+function EventTriggerCostOptionSelectPrompt:prerender()
+    ISPanel.prerender(self)
+    self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
+    self:drawRect(0, 0, self.width, 28, 0.7, 0.15, 0.15, 0.15)
+    self:drawTextCentre(getText("UI_ET_CostOption_Title"), self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
+
+    local leftX = 24
+
+    -- Reward (fixed) display
+    self:drawText(getText("UI_ET_CostOption_Reward"), leftX, self.costHeaderY, 0.3, 0.9, 0.5, 1, UIFont.Small)
+    local rwY = self.costItemsY
+    local rewItems = self.branch and (self.branch.rewards or {}) or {}
+    if #rewItems == 0 then
+        self:drawText(getText("UI_ET_Inv_None"), leftX + 8, rwY, 0.5, 0.5, 0.5, 1, UIFont.Small)
+    else
+        for _, r in ipairs(rewItems) do
+            local txt = fitText((r.displayName or "?") .. " x" .. tostring(r.count), UIFont.Small, self.width - 120)
+            self:drawText(txt, leftX + 8, rwY, 1, 1, 1, 1, UIFont.Small)
+            rwY = rwY + self.rowH
+        end
+    end
+
+    -- Divider
+    self:drawRect(leftX, self.listStartY - 5, self.width - 48, 1, 0.4, 0.4, 0.4, 0.4)
+
+    -- Cost options (selectable, filtered by owned)
+    if #self.ownedOptions == 0 then
+        self:drawText(getText("UI_ET_CostOption_None"), leftX + 8, self.listStartY + 4, 0.9, 0.5, 0.5, 1, UIFont.Small)
+    else
+        for idx, opt in ipairs(self.ownedOptions) do
+            local iy = self.listStartY + (idx - 1) * self.rowH
+            local selected = (idx == self.selectedIndex)
+            if selected then
+                self:drawRect(leftX, iy, self.width - 48, self.rowH - 2, 0.3, 0.25, 0.1, 0.3)
+            end
+
+            local cy = iy + (self.rowH - self.radioSize) / 2
+            self:drawRectBorder(leftX, cy, self.radioSize, self.radioSize, 0.8, 0.8, 0.8, 0.8)
+            if selected then
+                self:drawRect(leftX + 4, cy + 4, self.radioSize - 8, self.radioSize - 8, 1, 0.3, 0.9, 0.3)
+            end
+
+            local txt = fitText(string.format("%s  x%s  (%s %d)", opt.co.displayName or "?", tostring(opt.co.count or 1), getText("UI_ET_Batch_Have"), opt.have), UIFont.Small, self.width - 120)
+            self:drawText(txt, leftX + self.radioSize + 12, iy + 8, 1, 1, 1, 1, UIFont.Small)
+        end
+    end
+end
+
+function EventTriggerCostOptionSelectPrompt:new(player, delivery)
+    local w = EventTrigger.fitW(560)
     local h = EventTrigger.fitH(480)
     local sw = getCore():getScreenWidth()
     local sh = getCore():getScreenHeight()
@@ -1369,7 +1673,7 @@ function EventTriggerDeliveryItemSelectOR:onConfirm()
     end
     
     local player = getPlayer()
-    local playerKey = player and (player:getUsername() or "")
+    local playerKey = playerKeyOf(player)
     if playerKey then
         EventTrigger.Delivery._activePrompt[playerKey] = nil
         EventTrigger.Delivery._pendingDpId[playerKey] = nil
@@ -1379,42 +1683,22 @@ function EventTriggerDeliveryItemSelectOR:onConfirm()
     -- Store selected item index for Execute
     self.delivery._selectedORItemIndex = self.selectedItemIndex
     
-    if EventTrigger.IsMultiplayer() then
-        local ok, msg = EventTrigger.Delivery.Validate(player, self.delivery)
-        if not ok then
-            HaloTextHelper.addBadText(player, msg)
-            return
-        end
-        sendClientCommand("EventTrigger", "confirmDelivery", { id = self.delivery.id, selectedORIndex = self.selectedItemIndex })
-    else
-        local ok, msg = EventTrigger.Delivery.Execute(player, self.delivery)
-        if ok then
-            HaloTextHelper.addGoodText(player, msg)
-            self.delivery.triggerCount = (self.delivery.triggerCount or 0) + 1
-            if not self.delivery.triggeredBy then self.delivery.triggeredBy = {} end
-            if not self.delivery.playerDeliveries then self.delivery.playerDeliveries = {} end
-            self.delivery.playerDeliveries[playerKey] = (self.delivery.playerDeliveries[playerKey] or 0) + 1
-            local cd = self.delivery.cooldown or {}
-            if not EventTrigger.isCooldownZero(cd) then
-                if not self.delivery.playerCooldowns then self.delivery.playerCooldowns = {} end
-                self.delivery.playerCooldowns[playerKey] = EventTrigger.cooldownNowSeconds(cd.mode)
-            end
-            local ts, tsStr = EventTrigger.GetTimestamp()
-            table.insert(self.delivery.triggeredBy, { playerId = playerKey, timestamp = ts, timeStr = tsStr })
-            EventTrigger._saveToModData()
-        else
-            HaloTextHelper.addBadText(player, msg)
-        end
+    local ok, msg = EventTrigger.Delivery.Validate(player, self.delivery)
+    if not ok then
+        HaloTextHelper.addBadText(player, msg)
+        return
     end
+    sendClientCommand("EventTrigger", "confirmDelivery", { id = self.delivery.id, selectedORIndex = self.selectedItemIndex })
 end
 
 function EventTriggerDeliveryItemSelectOR:onCancel()
     local player = getPlayer()
-    local playerKey = player and (player:getUsername() or "")
+    local playerKey = playerKeyOf(player)
     if playerKey then
         EventTrigger.Delivery._activePrompt[playerKey] = nil
         EventTrigger.Delivery._pendingDpId[playerKey] = nil
     end
+    EventTrigger.Delivery.ClearSelection(self.delivery)
     self:close()
 end
 
@@ -1571,6 +1855,7 @@ function EventTrigger.Delivery.StartSetup(x, y, z)
         cooldown = { mode = EventTrigger.COOLDOWN_NONE },
         branchCount = 1,
         branchRewards = {},
+        costOptions = {},
         _currentBranchIdx = 1,
     }
     EventTrigger.Delivery.PromptHintText()
@@ -1717,6 +2002,14 @@ function EventTrigger.Delivery.PromptRequiredItems()
     EventTrigger.Delivery.ShowItemSelection("required")
 end
 
+-- 需求3: independent consume-option configuration (multiple optional consume items, same reward).
+function EventTrigger.Delivery.PromptCostOptions()
+    local p = EventTrigger.Delivery._setupPending
+    if not p then return end
+    p.costOptions = p.costOptions or {}
+    EventTrigger.Delivery.ShowItemSelection("cost")
+end
+
 function EventTrigger.Delivery.PromptRewardItems()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
@@ -1834,7 +2127,7 @@ function EventTriggerDeliveryItemSelect:buildItemData()
     local seen = {}
     for i = 0, items:size() - 1 do
         local item = items:get(i)
-        local key = (item:getFullType() or "") .. "|" .. (item:getDisplayName() or "")
+        local key = itemKey(item:getFullType(), item:getDisplayName())
         if not seen[key] then
             seen[key] = true
             table.insert(self.inventoryData, {
@@ -1856,7 +2149,7 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
 
     local p = EventTrigger.Delivery._setupPending
     local mode = EventTrigger.Delivery._selectionMode or "required"
-    local itemList = (p and mode == "required") and p.requiredItems or ((p and mode == "reward") and p.rewardItems or {})
+    local itemList = setupItemList(p, mode)
 
     local x = 12
     local w = self.leftW
@@ -1898,7 +2191,7 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
         local found = false
         if itemList then
             for _, si in ipairs(itemList) do
-                if si.fullType == data.fullType then found = true; break end
+                if si.fullType == data.fullType and si.displayName == data.displayName then found = true; break end
             end
         end
 
@@ -1935,8 +2228,8 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
         end
 
         if found then
-            local remBtn = makeRightBtn(getText("UI_ET_Inv_Remove"), EventTriggerDeliveryItemSelect.onRemoveItem, data.fullType, nil, rightEdge)
-            makeRightBtn(getText("UI_ET_Inv_Qty"), EventTriggerDeliveryItemSelect.onQtyItem, data.fullType, nil, remBtn.x - gap)
+            local remBtn = makeRightBtn(getText("UI_ET_Inv_Remove"), EventTriggerDeliveryItemSelect.onRemoveItem, data.fullType, data.displayName, rightEdge)
+            makeRightBtn(getText("UI_ET_Inv_Qty"), EventTriggerDeliveryItemSelect.onQtyItem, data.fullType, data.displayName, remBtn.x - gap)
         else
             makeRightBtn(getText("UI_ET_Inv_Add"), EventTriggerDeliveryItemSelect.onAddItem, data.fullType, data.displayName, rightEdge)
         end
@@ -1969,7 +2262,7 @@ function EventTriggerDeliveryItemSelect:onMouseWheel(del)
         local p = EventTrigger.Delivery._setupPending
         if not p then return end
         local mode = EventTrigger.Delivery._selectionMode or "required"
-        local itemList = (mode == "required") and p.requiredItems or p.rewardItems
+        local itemList = setupItemList(p, mode)
         local selTotal = math.max(1, math.ceil(#itemList / self.rowsPerPage))
         if del > 0 and self.rightPage > 0 then self.rightPage = self.rightPage - 1; self:updateRightPanel()
         elseif del < 0 and self.rightPage < selTotal - 1 then self.rightPage = self.rightPage + 1; self:updateRightPanel() end
@@ -1983,7 +2276,7 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local mode = EventTrigger.Delivery._selectionMode or "required"
-    local itemList = (mode == "required") and p.requiredItems or p.rewardItems
+    local itemList = setupItemList(p, mode)
     local selTotal = math.max(1, math.ceil(#itemList / self.rowsPerPage))
 
     if self.rightPage >= selTotal then self.rightPage = selTotal - 1 end
@@ -2098,7 +2391,7 @@ function EventTriggerDeliveryItemSelect:onRightNext()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local mode = EventTrigger.Delivery._selectionMode or "required"
-    local itemList = (mode == "required") and p.requiredItems or p.rewardItems
+    local itemList = setupItemList(p, mode)
     local selTotal = math.max(1, math.ceil(#itemList / self.rowsPerPage))
     if self.rightPage < selTotal - 1 then self.rightPage = self.rightPage + 1; self:updateRightPanel() end
 end
@@ -2123,7 +2416,7 @@ function EventTriggerDeliveryItemSelect:onAddItem(btn)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local mode = EventTrigger.Delivery._selectionMode or "required"
-    local itemList = (mode == "required") and p.requiredItems or p.rewardItems
+    local itemList = setupItemList(p, mode)
 
     table.insert(itemList, {
         fullType = btn.itemFullType,
@@ -2141,10 +2434,10 @@ function EventTriggerDeliveryItemSelect:onQtyItem(btn)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local mode = EventTrigger.Delivery._selectionMode or "required"
-    local itemList = (mode == "required") and p.requiredItems or p.rewardItems
+    local itemList = setupItemList(p, mode)
 
     for idx, si in ipairs(itemList) do
-        if si.fullType == btn.itemFullType then
+        if si.fullType == btn.itemFullType and si.displayName == btn.itemDisplayName then
             EventTrigger.Delivery.PromptItemQuantity(idx, mode, self)
             return
         end
@@ -2156,10 +2449,10 @@ function EventTriggerDeliveryItemSelect:onRemoveItem(btn)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local mode = EventTrigger.Delivery._selectionMode or "required"
-    local itemList = (mode == "required") and p.requiredItems or p.rewardItems
+    local itemList = setupItemList(p, mode)
 
     for idx = #itemList, 1, -1 do
-        if itemList[idx].fullType == btn.itemFullType then
+        if itemList[idx].fullType == btn.itemFullType and itemList[idx].displayName == btn.itemDisplayName then
             table.remove(itemList, idx)
             break
         end
@@ -2180,7 +2473,7 @@ function EventTriggerDeliveryItemSelect:onDelItem(btn)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     local mode = EventTrigger.Delivery._selectionMode or "required"
-    local itemList = (mode == "required") and p.requiredItems or p.rewardItems
+    local itemList = setupItemList(p, mode)
 
     if btn.itemIndex >= 1 and btn.itemIndex <= #itemList then
         table.remove(itemList, btn.itemIndex)
@@ -2209,6 +2502,8 @@ function EventTriggerDeliveryItemSelect:onDone()
     self:close()
 
     if mode == "required" then
+        EventTrigger.Delivery.PromptCostOptions()
+    elseif mode == "cost" then
         EventTrigger.Delivery.PromptRewardItems()
     elseif mode == "reward_branch" then
         -- Save this branch's rewards, advance to next
@@ -2234,6 +2529,9 @@ function EventTriggerDeliveryItemSelect:onBack()
     if mode == "required" then
         -- required items -> back to branch count
         EventTrigger.Delivery.PromptBranchCount()
+    elseif mode == "cost" then
+        -- cost options -> back to required items
+        EventTrigger.Delivery.PromptRequiredItems()
     elseif mode == "reward_branch" then
         local p = EventTrigger.Delivery._setupPending
         local idx = p and (p._currentBranchIdx or 1)
@@ -2243,12 +2541,12 @@ function EventTriggerDeliveryItemSelect:onBack()
             p.rewardItems = p.branchRewards[idx - 1] or {}
             EventTrigger.Delivery.ShowItemSelection("reward_branch")
         else
-            -- back to required items selection
-            EventTrigger.Delivery.PromptRequiredItems()
+            -- back to cost options
+            EventTrigger.Delivery.PromptCostOptions()
         end
     else
-        -- reward items -> back to required items selection
-        EventTrigger.Delivery.PromptRequiredItems()
+        -- reward items -> back to cost options
+        EventTrigger.Delivery.PromptCostOptions()
     end
 end
 
@@ -2275,6 +2573,8 @@ function EventTriggerDeliveryItemSelect:prerender()
     local titleStr
     if mode == "required" then
         titleStr = getText("UI_ET_Cfg_RequiredTitle")
+    elseif mode == "cost" then
+        titleStr = getText("UI_ET_Cfg_CostTitle")
     elseif mode == "reward_branch" then
         local p = EventTrigger.Delivery._setupPending
         titleStr = getText("UI_ET_Cfg_BranchRewardTitle", p and (p._currentBranchIdx or 1) or 1)
@@ -2320,7 +2620,7 @@ end
 function EventTrigger.Delivery.PromptItemQuantity(idx, mode, parentUI)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
-    local itemList = (mode == "required") and p.requiredItems or p.rewardItems
+    local itemList = setupItemList(p, mode)
     if not itemList or idx < 1 or idx > #itemList then return end
 
     local item = itemList[idx]
@@ -2356,25 +2656,47 @@ function EventTrigger.Delivery.PlacePending()
 
     local isEditing = p._editing
 
-    -- Build branches when multi-reward configured (需求2)
+    -- Build branches (需求2: multi-reward; 需求3: multi-consume).
+    -- 需求3 consume options come from the independent "cost" step (p.costOptions),
+    -- NOT from ET's native ANY/ALL qualification (requiredItems + matchMode).
+    -- Branch model is used when: explicit cost options configured, OR multi-reward branches.
+    local branchCount = p.branchCount or 1
+    local hasExplicitCost = #(p.costOptions or {}) > 0
     local branches = {}
-    if (p.branchCount or 1) > 1 then
+
+    if hasExplicitCost or branchCount > 1 then
         local costOptions = {}
-        for _, r in ipairs(p.requiredItems or {}) do
-            if r.collect ~= false then
-                costOptions[#costOptions + 1] = {
-                    fullType = r.fullType,
-                    displayName = r.displayName,
-                    count = r.count,
-                }
+        for _, c in ipairs(p.costOptions or {}) do
+            costOptions[#costOptions + 1] = {
+                fullType = c.fullType,
+                displayName = c.displayName,
+                count = c.count,
+            }
+        end
+        if #costOptions == 0 then
+            -- 需求2 fallback: shared consume derived from requiredItems (collect=true)
+            for _, r in ipairs(p.requiredItems or {}) do
+                if r.collect ~= false then
+                    costOptions[#costOptions + 1] = {
+                        fullType = r.fullType,
+                        displayName = r.displayName,
+                        count = r.count,
+                    }
+                end
             end
         end
-        for i = 1, p.branchCount do
+        for i = 1, branchCount do
+            local rewards
+            if branchCount <= 1 then
+                rewards = p.rewardItems or {}
+            else
+                rewards = p.branchRewards[i] or {}
+            end
             branches[i] = {
                 id = i,
                 enabled = true,
                 costOptions = costOptions,
-                rewards = p.branchRewards[i] or {},
+                rewards = rewards,
             }
         end
     end
@@ -2413,73 +2735,41 @@ function EventTrigger.Delivery.PlacePending()
             dp.requiredItems = p.requiredItems or {}
             dp.rewardItems = p.rewardItems or {}
             dp.branches = branches
-            if EventTrigger.IsMultiplayer() then
-                args.id = dp.id
-                args.triggerCount = dp.triggerCount or 0
-                sendClientCommand("EventTrigger", "editDelivery", args)
-            else
-                EventTrigger._saveToModData()
-            end
+            args.id = dp.id
+            args.triggerCount = dp.triggerCount or 0
+            sendClientCommand("EventTrigger", "editDelivery", args)
         end
         EventTrigger.Delivery._setupPending = nil
         if EventTrigger._ui then EventTrigger._ui:refreshList() end
         return
     end
 
-    if EventTrigger.IsMultiplayer() then
-        -- Add locally for immediate feedback, server persists + broadcasts syncAll for confirmation
-        local dp = {
-            id = "dlv_" .. tostring(os.time()) .. "_" .. tostring(ZombRand(10000, 99999)),
-            type = "delivery",
-            x = p.x, y = p.y, z = p.z,
-            hintText = p.hintText or "Delivery Point",
-            range = p.radius or 3.0,
-            maxPlayers = p.maxPlayers or -1,
-            maxPerPlayer = p.maxPerPlayer or -1,
-            matchMode = p.matchMode or "all",
-            cooldown = EventTrigger.makeCooldown(p.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
-            requiredItems = p.requiredItems or {},
-            rewardItems = p.rewardItems or {},
-            branches = branches,
-            playerDeliveries = {},
-            playerCooldowns = {},
-            enabled = true,
-            creator = EventTrigger.GetCurrentPlayerId(),
-            createdAt = os.time(),
-            triggerCount = 0,
-            triggeredBy = {},
-        }
-        EventTrigger.deliveryPoints[#EventTrigger.deliveryPoints + 1] = dp
-        args.id = dp.id
-        sendClientCommand("EventTrigger", "placeDeliveryPoint", args)
-        if EventTrigger._ui then EventTrigger._ui:refreshList() end
-    else
-        -- SP: add directly
-        local dp = {
-            id = "dlv_" .. tostring(os.time()) .. "_" .. tostring(ZombRand(10000, 99999)),
-            type = "delivery",
-            x = p.x, y = p.y, z = p.z,
-            hintText = p.hintText or "Delivery Point",
-            range = p.radius or 3.0,
-            maxPlayers = p.maxPlayers or -1,
-            maxPerPlayer = p.maxPerPlayer or -1,
-            matchMode = p.matchMode or "all",
-            cooldown = EventTrigger.makeCooldown(p.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
-            requiredItems = p.requiredItems or {},
-            rewardItems = p.rewardItems or {},
-            branches = branches,
-            playerDeliveries = {},
-            playerCooldowns = {},
-            enabled = true,
-            creator = EventTrigger.GetCurrentPlayerId(),
-            createdAt = os.time(),
-            triggerCount = 0,
-            triggeredBy = {},
-            _dlvPrompted = {},
-        }
-        EventTrigger.deliveryPoints[#EventTrigger.deliveryPoints + 1] = dp
-        EventTrigger._saveToModData()
-    end
+    -- Add locally for immediate feedback, server persists + broadcasts syncAll for confirmation
+    local dp = {
+        id = "dlv_" .. tostring(os.time()) .. "_" .. tostring(ZombRand(10000, 99999)),
+        type = "delivery",
+        x = p.x, y = p.y, z = p.z,
+        hintText = p.hintText or "Delivery Point",
+        range = p.radius or 3.0,
+        maxPlayers = p.maxPlayers or -1,
+        maxPerPlayer = p.maxPerPlayer or -1,
+        matchMode = p.matchMode or "all",
+        cooldown = EventTrigger.makeCooldown(p.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
+        requiredItems = p.requiredItems or {},
+        rewardItems = p.rewardItems or {},
+        branches = branches,
+        playerDeliveries = {},
+        playerCooldowns = {},
+        enabled = true,
+        creator = EventTrigger.GetCurrentPlayerId(),
+        createdAt = os.time(),
+        triggerCount = 0,
+        triggeredBy = {},
+    }
+    EventTrigger.deliveryPoints[#EventTrigger.deliveryPoints + 1] = dp
+    args.id = dp.id
+    sendClientCommand("EventTrigger", "placeDeliveryPoint", args)
+    if EventTrigger._ui then EventTrigger._ui:refreshList() end
 
     EventTrigger.Delivery._setupPending = nil
 end
@@ -2488,7 +2778,7 @@ end
 -- Handle server delivery result (add rewards on success)
 -- ============================================================
 function EventTrigger.Delivery.OnDeliveryResult(player, success, message, rewardItems)
-    local playerKey = player and (player:getUsername() or "")
+    local playerKey = playerKeyOf(player)
     if playerKey then
         EventTrigger.Delivery._activePrompt[playerKey] = nil
         EventTrigger.Delivery._pendingDpId[playerKey] = nil
@@ -2504,15 +2794,14 @@ end
 -- Clean up all delivery UIs
 -- ============================================================
 function EventTrigger.Delivery.CloseAllUIs()
-    if EventTrigger.Delivery._promptUI then
-        EventTrigger.Delivery._promptUI:close()
-    end
-    if EventTrigger.Delivery._confirmUI then
-        EventTrigger.Delivery._confirmUI:close()
-    end
-    if EventTrigger.Delivery._selectionUI then
-        EventTrigger.Delivery._selectionUI:close()
-    end
+    if EventTrigger.Delivery._promptUI then EventTrigger.Delivery._promptUI:close() end
+    if EventTrigger.Delivery._confirmUI then EventTrigger.Delivery._confirmUI:close() end
+    if EventTrigger.Delivery._selectionUI then EventTrigger.Delivery._selectionUI:close() end
+    if EventTrigger.Delivery._batchPromptUI then EventTrigger.Delivery._batchPromptUI:close() end
+    if EventTrigger.Delivery._branchSelectUI then EventTrigger.Delivery._branchSelectUI:close() end
+    if EventTrigger.Delivery._costOptionSelectUI then EventTrigger.Delivery._costOptionSelectUI:close() end
+    if EventTrigger.Delivery._itemSelectUI then EventTrigger.Delivery._itemSelectUI:close() end
+    if EventTrigger.Delivery._histUI then EventTrigger.Delivery._histUI:close() end
 end
 
 -- ============================================================
@@ -2522,13 +2811,7 @@ end
 -- Delete a delivery point
 function EventTrigger.Delivery.DeleteDelivery(dlvIdx, dp)
     if not dp or not dp.id then return end
-    if EventTrigger.IsMultiplayer() then
-        sendClientCommand("EventTrigger", "deleteDeliveryPoint", { id = dp.id })
-    else
-        table.remove(EventTrigger.deliveryPoints, dlvIdx)
-        EventTrigger._saveToModData()
-    end
-    -- Refresh UI after a short delay to allow server sync
+    sendClientCommand("EventTrigger", "deleteDeliveryPoint", { id = dp.id })
     if EventTrigger._ui then EventTrigger._ui:refreshList() end
 end
 
@@ -2539,12 +2822,7 @@ function EventTrigger.Delivery.ResetDelivery(dlvIdx, dp)
     dp.triggeredBy = {}
     dp.playerDeliveries = {}
     dp.playerCooldowns = {}
-    -- MP: inform server
-    if EventTrigger.IsMultiplayer() then
-        sendClientCommand("EventTrigger", "resetDelivery", { id = dp.id })
-    else
-        EventTrigger._saveToModData()
-    end
+    sendClientCommand("EventTrigger", "resetDelivery", { id = dp.id })
     if EventTrigger._ui then EventTrigger._ui:refreshList() end
 end
 
@@ -2552,13 +2830,8 @@ end
 function EventTrigger.Delivery.ToggleDelivery(dlvIdx, dp)
     if not dp or not dp.id then return end
     local enabled = not (dp.enabled ~= false)
-    if EventTrigger.IsMultiplayer() then
-        dp.enabled = enabled
-        sendClientCommand("EventTrigger", "toggleDelivery", { id = dp.id, enabled = enabled })
-    else
-        dp.enabled = enabled
-        EventTrigger._saveToModData()
-    end
+    dp.enabled = enabled
+    sendClientCommand("EventTrigger", "toggleDelivery", { id = dp.id, enabled = enabled })
     if EventTrigger._ui then EventTrigger._ui:refreshList() end
 end
 
@@ -2577,6 +2850,12 @@ function EventTrigger.Delivery.EditDelivery(dlvIdx, dp)
         branchRewards[i] = EventTrigger.Delivery._cloneItems(b.rewards or {})
     end
 
+    -- Restore cost options (需求3) from the first branch so editing does not drop them.
+    local costOptions = {}
+    if #branches > 0 then
+        costOptions = EventTrigger.Delivery._cloneItems(branches[1].costOptions or {})
+    end
+
     -- Start edit wizard at delivery point position, pre-populated
     EventTrigger.Delivery._setupPending = {
         x = dp.x, y = dp.y, z = dp.z,
@@ -2588,6 +2867,7 @@ function EventTrigger.Delivery.EditDelivery(dlvIdx, dp)
         cooldown = EventTrigger.makeCooldown(dp.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
         requiredItems = EventTrigger.Delivery._cloneItems(dp.requiredItems or {}),
         rewardItems = EventTrigger.Delivery._cloneItems(dp.rewardItems or {}),
+        costOptions = costOptions,
         branchCount = branchCount,
         branchRewards = branchRewards,
         _currentBranchIdx = 1,

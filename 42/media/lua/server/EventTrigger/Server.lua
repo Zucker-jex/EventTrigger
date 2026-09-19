@@ -550,8 +550,8 @@ Server.onClientCommand = function(module, command, player, args)
         local cooldown = dp.cooldown or {}
         local selectedORIndex = args.selectedORIndex
 
-        -- Resolve the effective exchange plan (branches if present, else legacy fields)
-        local costs, rewards, branchErr = Shared.resolveExchange(dp, args.branchId, args.costOptionIndex)
+        -- Resolve the effective exchange plan (qualify gate + cost + reward)
+        local qualifyItems, costs, rewards, branchErr = Shared.resolveExchange(dp, args.branchId, args.costOptionIndex)
         if branchErr then
             sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
                 action = "failed", reason = branchErr,
@@ -566,7 +566,7 @@ Server.onClientCommand = function(module, command, player, args)
             for _, req in ipairs(dp.requiredItems or {}) do
                 idx = idx + 1
                 if idx == targetIdx and req.collect ~= false then
-                    costs[1] = { fullType = req.fullType, count = req.count }
+                    costs[1] = { fullType = req.fullType, displayName = req.displayName, count = req.count }
                     break
                 end
             end
@@ -617,20 +617,55 @@ Server.onClientCommand = function(module, command, player, args)
         end
 
         local items = inv:getItems()
-        local function countOwned(fullType)
+        local function matchesCost(it, cost)
+            if not it then return false end
+            return it:getFullType() == cost.fullType
+        end
+        local function countOwned(cost)
             local n = 0
             for i = 0, items:size() - 1 do
                 local it = items:get(i)
-                if it and it:getFullType() == fullType and inv:contains(it) then
+                if it and inv:contains(it) and matchesCost(it, cost) then
                     n = n + 1
                 end
             end
             return n
         end
 
+        -- 资格门槛检查：需求物品 requiredItems（缺失则拒绝交换）
+        if #qualifyItems > 0 then
+            local matchMode = dp.matchMode or "all"
+            if matchMode == "any" then
+                local hasQualify = false
+                for _, q in ipairs(qualifyItems) do
+                    local need = q.collect and (q.count * batchCount) or q.count
+                    if countOwned(q) >= need then
+                        hasQualify = true
+                        break
+                    end
+                end
+                if not hasQualify then
+                    sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
+                        action = "failed", reason = "Missing required items in backpack!",
+                    })
+                    return
+                end
+            else
+                for _, q in ipairs(qualifyItems) do
+                    local need = q.collect and (q.count * batchCount) or q.count
+                    if countOwned(q) < need then
+                        sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
+                            action = "failed", reason = "Missing required items in backpack!",
+                        })
+                        return
+                    end
+                end
+            end
+        end
+
         -- Atomic pre-check: ensure enough stock for the whole batch
         for _, cost in ipairs(costs) do
-            if countOwned(cost.fullType) < cost.count * batchCount then
+            if countOwned(cost) < cost.count * batchCount then
                 sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
                     action = "failed", reason = "Missing required items in backpack!",
                 })
@@ -645,7 +680,7 @@ Server.onClientCommand = function(module, command, player, args)
             for i = items:size() - 1, 0, -1 do
                 if toRemove <= 0 then break end
                 local it = items:get(i)
-                if it and it:getFullType() == cost.fullType and inv:contains(it) then
+                if it and inv:contains(it) and matchesCost(it, cost) then
                     inv:Remove(it)
                     sendRemoveItemFromContainer(inv, it)
                     removedItems[#removedItems + 1] = it
