@@ -254,10 +254,13 @@ end
 -- ============================================================
 
 -- 构建单个交付物品条目
+-- customName：非空表示该条目要求"被改名的物品"，值为自定义名原文（语言无关）；
+--             为空表示要求"未改名的普通物品"。用于区分同 fullType 的改名/未改名实例。
 EventTriggerShared.makeDeliveryItem = function(args)
     return {
         fullType    = tostring(args.fullType or ""),
         displayName = tostring(args.displayName or ""),
+        customName  = tostring(args.customName or ""),
         count       = math.max(1, args.count or 1),
         collect     = args.collect ~= false,
     }
@@ -268,6 +271,7 @@ EventTriggerShared.makeCostOption = function(args)
     return {
         fullType    = tostring(args.fullType or ""),
         displayName = tostring(args.displayName or ""),
+        customName  = tostring(args.customName or ""),
         count       = math.max(1, args.count or 1),
     }
 end
@@ -337,6 +341,7 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
         qualifyItems[#qualifyItems + 1] = {
             fullType = tostring(req.fullType or ""),
             displayName = tostring(req.displayName or ""),
+            customName = tostring(req.customName or ""),
             count = math.max(1, req.count or 1),
             collect = req.collect ~= false,
         }
@@ -350,6 +355,7 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
                 costs[#costs + 1] = {
                     fullType = req.fullType,
                     displayName = req.displayName,
+                    customName = req.customName or "",
                     count = req.count,
                 }
             end
@@ -374,6 +380,7 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
             costs[#costs + 1] = {
                 fullType = req.fullType,
                 displayName = req.displayName,
+                customName = req.customName or "",
                 count = req.count,
             }
         end

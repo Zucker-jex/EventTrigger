@@ -653,10 +653,33 @@ Server.onClientCommand = function(module, command, player, args)
                 end
             end
         end
-        -- 判断背包物品是否匹配目标消耗项（比较脚本标识 fullType）
+        -- 判定物品是否被改名（语言无关）。
+        -- 1) isCustomName() 为 true → 已改名（需调用方配对 setCustomName(true)）
+        -- 2) 兜底：显示名 ≠ 脚本默认显示名 → 已改名（两端各自语言环境内自洽）
+        local function isItemRenamed(it)
+            if not it then return false end
+            local ok2, v = pcall(function() return it:isCustomName() end)
+            if ok2 and type(v) == "boolean" and v then return true end
+            local ok3, scriptItem = pcall(function() return it:getScriptItem() end)
+            if ok3 and scriptItem then
+                local ok4, defaultName = pcall(function() return scriptItem:getDisplayName() end)
+                if ok4 and type(defaultName) == "string" and #defaultName > 0 then
+                    return it:getDisplayName() ~= defaultName
+                end
+            end
+            return false
+        end
+        -- 判断背包物品是否匹配目标消耗项：
+        --   customName 非空 → 要求"改名物品"，比自定义名（玩家输入字符串，不翻译，跨语言安全）
+        --   customName 为空 → 要求"普通物品"，排除已改名的实例
         local function matchesCost(it, cost)
             if not it then return false end
-            return it:getFullType() == cost.fullType
+            if it:getFullType() ~= cost.fullType then return false end
+            local want = cost.customName or ""
+            if #want > 0 then
+                return it:getDisplayName() == want
+            end
+            return not isItemRenamed(it)
         end
         -- 统计背包中匹配指定消耗项的物品数量（含嵌套背包）
         local function countOwned(cost)

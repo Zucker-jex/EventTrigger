@@ -40,17 +40,45 @@ local function playerKeyOf(player)
     if u and #u > 0 then return u end
     return tostring(player:getOnlineID()) or ""
 end
-
--- 匹配键 = FullType（语言无关的稳定脚本标识）。
--- displayName 是运行时翻译名，且会被 setName 覆盖，不能用于跨端匹配。
-local function itemKey(fullType)
-    return tostring(fullType or "")
+-- 匹配键 = FullType + 自定义名。
+-- 普通物品用 fullType（语言无关）；被 setName 改名的物品额外用自定义名区分。
+local function itemKey(fullType, customName)
+    return tostring(fullType or "") .. "|" .. tostring(customName or "")
 end
 
--- 物品是否匹配配置条目（比较脚本标识 fullType）
+-- 物品是否被改名（语言无关）。
+-- 判定顺序：
+--   1) InventoryItem.customName 标志（isCustomName()）为 true → 已改名。
+--      注意：此标志只有在调用方配对调用过 setCustomName(true) 时才为真，
+--      部分改名途径（原版钥匙/描述命名等）只调 setName，不会置该标志。
+--   2) 兜底比较：物品当前显示名 ≠ 脚本默认显示名 → 已改名。
+--      两者都在本客户端同一语言环境下取值，因此比较是语言自洽的。
+local function isItemRenamed(item)
+    if not item then return false end
+    local ok, v = pcall(function() return item:isCustomName() end)
+    if ok and type(v) == "boolean" and v then return true end
+    -- 兜底：与脚本默认显示名比较
+    local ok2, scriptItem = pcall(function() return item:getScriptItem() end)
+    if ok2 and scriptItem then
+        local ok3, defaultName = pcall(function() return scriptItem:getDisplayName() end)
+        if ok3 and type(defaultName) == "string" and #defaultName > 0 then
+            return item:getDisplayName() ~= defaultName
+        end
+    end
+    return false
+end
+
+-- 物品是否匹配配置条目：
+--   customName 非空 → 要求"改名物品"，精确比自定义名（语言无关，可区分同 fullType 的多把实例）
+--   customName 为空 → 要求"普通物品"，按 fullType 匹配（避开翻译名跨语言的差异）
 local function matchesItem(item, cfg)
     if not item or not cfg then return false end
-    return item:getFullType() == cfg.fullType
+    if item:getFullType() ~= cfg.fullType then return false end
+    local want = cfg.customName or ""
+    if #want > 0 then
+        return item:getDisplayName() == want
+    end
+    return not isItemRenamed(item)
 end
 
 -- ============================================================
@@ -132,7 +160,7 @@ function EventTrigger.Delivery.CountItems(inventory, requiredItems)
         if item then
             for _, req in ipairs(requiredItems) do
                 if matchesItem(item, req) then
-                    local key = itemKey(req.fullType)
+                    local key = itemKey(req.fullType, req.customName)
                     counts[key] = (counts[key] or 0) + 1
                 end
             end
@@ -256,7 +284,7 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
             local hasAny = false
             for _, q in ipairs(qualifyItems) do
                 local need = q.collect and (q.count * batchCount) or q.count
-                if (qualCounts[itemKey(q.fullType)] or 0) >= need then
+                if (qualCounts[itemKey(q.fullType, q.customName)] or 0) >= need then
                     hasAny = true
                     break
                 end
@@ -265,7 +293,7 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
         else
             for _, q in ipairs(qualifyItems) do
                 local need = q.collect and (q.count * batchCount) or q.count
-                if (qualCounts[itemKey(q.fullType)] or 0) < need then
+                if (qualCounts[itemKey(q.fullType, q.customName)] or 0) < need then
                     return false, getText("UI_ET_Msg_MissingItems")
                 end
             end
@@ -521,15 +549,15 @@ function EventTriggerDeliveryPrompt:prerender()
         if matchMode == "any" then
             qualifyOk = false
             for _, req in ipairs(reqItems) do
-                if (counts[itemKey(req.fullType)] or 0) >= (req.count or 1) then qualifyOk = true; break end
+                if (counts[itemKey(req.fullType, req.customName)] or 0) >= (req.count or 1) then qualifyOk = true; break end
             end
         else
             for _, req in ipairs(reqItems) do
-                if (counts[itemKey(req.fullType)] or 0) < (req.count or 1) then qualifyOk = false; break end
+                if (counts[itemKey(req.fullType, req.customName)] or 0) < (req.count or 1) then qualifyOk = false; break end
             end
         end
         for _, req in ipairs(reqItems) do
-            local have = counts[itemKey(req.fullType)] or 0
+            local have = counts[itemKey(req.fullType, req.customName)] or 0
             local suffix = (req.collect ~= false) and getText("UI_ET_Dlv_CollectSuffix") or getText("UI_ET_Dlv_CheckOnlySuffix")
             local txt = fitText((req.displayName or "?") .. "  x" .. tostring(req.count) .. suffix .. "  [" .. getText("UI_ET_Batch_Have") .. " " .. have .. "]", UIFont.Small, self.width - 48)
             self:drawText(txt, 24, y, 1, 1, 1, 1, UIFont.Small)
@@ -585,6 +613,7 @@ function EventTrigger.Delivery.resolveView(delivery)
         qualifyItems[#qualifyItems + 1] = {
             fullType = req.fullType,
             displayName = req.displayName,
+            customName = req.customName or "",
             count = req.count,
             collect = req.collect ~= false,
         }
@@ -598,6 +627,7 @@ function EventTrigger.Delivery.resolveView(delivery)
                 costItems[#costItems + 1] = {
                     fullType = req.fullType,
                     displayName = req.displayName,
+                    customName = req.customName or "",
                     count = req.count,
                     collect = true,
                 }
@@ -623,6 +653,7 @@ function EventTrigger.Delivery.resolveView(delivery)
             costItems[#costItems + 1] = {
                 fullType = req.fullType,
                 displayName = req.displayName,
+                customName = req.customName or "",
                 count = req.count,
                 collect = true,
             }
@@ -642,6 +673,7 @@ function EventTrigger.Delivery.resolveView(delivery)
         costItems[#costItems + 1] = {
             fullType = chosen.fullType,
             displayName = chosen.displayName,
+            customName = chosen.customName or "",
             count = chosen.count,
             collect = true,
         }
@@ -997,7 +1029,7 @@ function EventTriggerBatchCountPrompt:computeCosts()
     self.rewardItems = rewardItems
     local counts = EventTrigger.Delivery.CountItems(inv, costItems)
     for _, req in ipairs(costItems) do
-        local have = counts[itemKey(req.fullType)] or 0
+        local have = counts[itemKey(req.fullType, req.customName)] or 0
         local maxForThis = math.floor(have / (req.count or 1))
         if self.maxN == nil or maxForThis < self.maxN then
             self.maxN = maxForThis
@@ -1471,7 +1503,7 @@ function EventTriggerCostOptionSelectPrompt:create()
     if inv then
         local counts = EventTrigger.Delivery.CountItems(inv, self.costOptions)
         for idx, co in ipairs(self.costOptions) do
-            local have = counts[itemKey(co.fullType)] or 0
+            local have = counts[itemKey(co.fullType, co.customName)] or 0
             if have > 0 then
                 self.ownedOptions[#self.ownedOptions + 1] = {
                     idx = idx,
@@ -2190,7 +2222,7 @@ function EventTriggerDeliveryItemSelect:clearSelected()
     self.selectedChildren = {}
 end
 
--- 收集背包数据（按 FullType 去重）
+-- 收集背包数据（按 FullType + 自定义名去重：改名与未改名实例分开列出）
 function EventTriggerDeliveryItemSelect:buildItemData()
     self.inventoryData = {}
     local player = getPlayer()
@@ -2201,12 +2233,15 @@ function EventTriggerDeliveryItemSelect:buildItemData()
     local seen = {}
     for i = 0, items:size() - 1 do
         local item = items:get(i)
-        local key = itemKey(item:getFullType())
+        -- 改名物品记录自定义名原文（匹配用，语言无关）；未改名物品为空串
+        local customName = isItemRenamed(item) and item:getDisplayName() or ""
+        local key = itemKey(item:getFullType(), customName)
         if not seen[key] then
             seen[key] = true
             table.insert(self.inventoryData, {
                 fullType = item:getFullType(),
                 displayName = item:getDisplayName(),
+                customName = customName,
             })
         end
     end
@@ -2265,7 +2300,9 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
         local found = false
         if itemList then
             for _, si in ipairs(itemList) do
-                if si.fullType == data.fullType then found = true; break end
+                if si.fullType == data.fullType and (si.customName or "") == (data.customName or "") then
+                    found = true; break
+                end
             end
         end
 
@@ -2290,22 +2327,23 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
         local btnY = y + 10
         local gap = 6
         local rightEdge = x + w - 6
-        local function makeRightBtn(title, handler, fullType, displayName, rightX)
+        local function makeRightBtn(title, handler, fullType, displayName, customName, rightX)
             local bw = EventTrigger.btnW(title)
             local btn = ISButton:new(rightX - bw, btnY, bw, 24, title, self, handler)
             btn:initialise()
             btn.itemFullType = fullType
             btn.itemDisplayName = displayName
+            btn.itemCustomName = customName
             self:addChild(btn)
             table.insert(self.rowChildren, btn)
             return btn
         end
 
         if found then
-            local remBtn = makeRightBtn(getText("UI_ET_Inv_Remove"), EventTriggerDeliveryItemSelect.onRemoveItem, data.fullType, data.displayName, rightEdge)
-            makeRightBtn(getText("UI_ET_Inv_Qty"), EventTriggerDeliveryItemSelect.onQtyItem, data.fullType, data.displayName, remBtn.x - gap)
+            local remBtn = makeRightBtn(getText("UI_ET_Inv_Remove"), EventTriggerDeliveryItemSelect.onRemoveItem, data.fullType, data.displayName, data.customName, rightEdge)
+            makeRightBtn(getText("UI_ET_Inv_Qty"), EventTriggerDeliveryItemSelect.onQtyItem, data.fullType, data.displayName, data.customName, remBtn.x - gap)
         else
-            makeRightBtn(getText("UI_ET_Inv_Add"), EventTriggerDeliveryItemSelect.onAddItem, data.fullType, data.displayName, rightEdge)
+            makeRightBtn(getText("UI_ET_Inv_Add"), EventTriggerDeliveryItemSelect.onAddItem, data.fullType, data.displayName, data.customName, rightEdge)
         end
     end
 
@@ -2495,6 +2533,7 @@ function EventTriggerDeliveryItemSelect:onAddItem(btn)
     table.insert(itemList, {
         fullType = btn.itemFullType,
         displayName = btn.itemDisplayName,
+        customName = btn.itemCustomName or "",
         count = 1,
         collect = true,
     })
@@ -2511,7 +2550,7 @@ function EventTriggerDeliveryItemSelect:onQtyItem(btn)
     local itemList = setupItemList(p, mode)
 
     for idx, si in ipairs(itemList) do
-        if si.fullType == btn.itemFullType then
+        if si.fullType == btn.itemFullType and (si.customName or "") == (btn.itemCustomName or "") then
             EventTrigger.Delivery.PromptItemQuantity(idx, mode, self)
             return
         end
@@ -2526,7 +2565,7 @@ function EventTriggerDeliveryItemSelect:onRemoveItem(btn)
     local itemList = setupItemList(p, mode)
 
     for idx = #itemList, 1, -1 do
-        if itemList[idx].fullType == btn.itemFullType then
+        if itemList[idx].fullType == btn.itemFullType and (itemList[idx].customName or "") == (btn.itemCustomName or "") then
             table.remove(itemList, idx)
             break
         end
@@ -2744,6 +2783,7 @@ function EventTrigger.Delivery.PlacePending()
             costOptions[#costOptions + 1] = {
                 fullType = c.fullType,
                 displayName = c.displayName,
+                customName = c.customName or "",
                 count = c.count,
             }
         end
@@ -2754,6 +2794,7 @@ function EventTrigger.Delivery.PlacePending()
                     costOptions[#costOptions + 1] = {
                         fullType = r.fullType,
                         displayName = r.displayName,
+                        customName = r.customName or "",
                         count = r.count,
                     }
                 end
@@ -2971,6 +3012,7 @@ function EventTrigger.Delivery._cloneItems(items)
         out[#out + 1] = {
             fullType = item.fullType,
             displayName = item.displayName,
+            customName = item.customName or "",
             count = item.count,
             collect = item.collect ~= false,
         }

@@ -10,16 +10,16 @@ Project Zomboid（B42）管理员事件触发器模组 —— 在指定坐标放
 
 - **区域触发**：在任意方格放置触发器，玩家进入指定半径即触发。
 - **多种输出模式**：
-  | 模式 | 说明 |
-  |------|------|
-  | `NAMED` | 具名系统消息（可自定义显示名） |
-  | `SAY` | 触发者身份 + 头顶气泡 |
-  | `DO` | 环境旁白 |
-  | `LOW` | 低语 + 气泡 |
-  | `YELL` | 大喊 + 气泡 |
-  | `OOC` | 全局 OOC 频道 |
-  | `HALO` | 头顶漂浮文字（不进入聊天日志） |
-  | `BROADCAST` | 全服广播，可具名 |
+  | 模式 | 说明 | 可见范围 |
+  |------|------|----------|
+  | `NAMED` | 具名系统消息（可自定义显示名） | 仅本地 |
+  | `SAY` | 触发者身份 + 头顶气泡 | 范围内 |
+  | `DO` | 环境旁白 | 范围内 |
+  | `LOW` | 低语 + 气泡 | 范围内 |
+  | `YELL` | 大喊 + 气泡 | 范围内 |
+  | `OOC` | 全局 OOC 频道 | 范围内 |
+  | `HALO` | 头顶漂浮文字（不进入聊天日志） | 仅本地 |
+  | `BROADCAST` | 服务器广播，可具名 | 全服 |
 - **延迟触发**：可设置 0–3600 秒延迟后再显示消息。
 - **次数上限**：单触发器可设最大触发次数（-1 = 无限制）。
 - **冷却机制**：支持真实时钟（wall clock）与游戏时钟（game clock），粒度到年 / 月 / 日 / 时 / 分。
@@ -30,7 +30,10 @@ Project Zomboid（B42）管理员事件触发器模组 —— 在指定坐标放
 ### 交付点（Delivery Point）
 
 - **物品兑换**：玩家进入交付点范围后弹出确认 UI，校验背包物品并发放奖励。
-- **双重匹配**：客户端按 `FullType + DisplayName` 严格校验；服务器按 `FullType` 宽松执行（规避翻译差异）。
+- **三层物品模型**：**需求物品**（资格门槛）/ **消耗物品**（实际扣款）/ **奖励物品**，职责分离。
+- **移除 / 仅检查**：需求物品可勾选"移除"（既作门槛又扣除）或"仅检查"（只作门槛，不扣除），UI 会明确标注。
+- **实例级扣款**：客户端选定要扣除的具体物品实例（按 `getID()`），服务器按 ID 扣除 —— 从根本上杜绝"扣错同 `fullType` 的另一实例"。
+- **改名物品区分**：匹配键为 `fullType + customName`，可区分"同 fullType 的多把实例"（如 2 把普通钥匙 + 1 把改名 "test"），选择列表中分别显示。
 - **多分支奖励**：同一次消耗，可选多个奖励分支之一。
 - **多消耗选项**：同一奖励，可选多个消耗物品之一。
 - **批量兑换**：一次最多 N 次（上限 20），实时预览消耗与奖励总量。
@@ -40,12 +43,12 @@ Project Zomboid（B42）管理员事件触发器模组 —— 在指定坐标放
 ### 数据与同步
 
 - **服务器权威**：服务器 JSON 文件为唯一数据源，客户端登录 / 刷新时通过 `syncAll` 全量拉取。
-- **乐观 UI**：客户端本地先执行操作以获得即时反馈，再由服务器确认。
+- **仅联机**：本模组**仅面向多人服务器**，单机（SP）下不加载、不执行。
 - **向后兼容**：自动迁移旧版 `ModData` 触发器到 JSON 文件；冷却字段兼容旧版 `cooldownType/cooldownValue`。
 
 ### 可选集成
 
-- **MongooseChat**：`SAY / LOW / YELL / DO / OOC` 频道通过 MongooseChat 管线广播；`NAMED` 通过 EventTrigger 服务器广播到系统频道。未安装 MongooseChat 时自动回退到原生 `ISChat` 或 `HALO`。
+- **MongooseChat**：`SAY / LOW / YELL / DO / OOC` 频道通过 MongooseChat 管线广播；`NAMED` / `BROADCAST` 走系统频道；`NAMED` 仅本地显示，`BROADCAST` 由 EventTrigger 服务器广播全服。未安装 MongooseChat 时自动回退到原生 `ISChat` 或 `HALO`。
 
 ---
 
@@ -89,6 +92,8 @@ Project Zomboid（B42）管理员事件触发器模组 —— 在指定坐标放
    - `设置交付点 (x,y,z)` — 启动交付点向导（需交付模块已加载）
    - `打开管理器` — 打开主管理面板
 
+> 仅管理员可见上述菜单项；单机模式不加载本模组。
+
 ### 触发器放置向导
 
 依次输入：
@@ -98,7 +103,7 @@ Project Zomboid（B42）管理员事件触发器模组 —— 在指定坐标放
 3. **最大触发次数**（-1 = 无限制）
 4. **消息内容**
 5. **输出模式**
-6. **显示名**（仅 `NAMED` 模式）
+6. **显示名**（仅 `NAMED` / `BROADCAST` 模式）
 7. **冷却**（模式 + 时长）
 
 ### 交付点设置向导
@@ -111,8 +116,8 @@ Project Zomboid（B42）管理员事件触发器模组 —— 在指定坐标放
 4. **匹配模式**（`all` = 全部满足 / `any` = 任一满足）
 5. **冷却**
 6. **奖励分支数量**（1–10）
-7. **需求物品**（资格门槛，可勾选 "消耗"）
-8. **消耗选项**（可选，多个互斥）
+7. **需求物品**（资格门槛，可勾选"移除"/"仅检查"）
+8. **消耗物品**（可选，多个互斥）
 9. **各分支奖励**
 
 ### 主管理面板
@@ -183,14 +188,16 @@ EventTrigger/
 | `editDelivery`        | 交付点字段                                                       | 编辑交付点          |
 | `resetDelivery`       | `{ id }`                                                         | 重置交付点          |
 | `toggleDelivery`      | `{ id, enabled }`                                                | 启用 / 禁用         |
-| `confirmDelivery`     | `{ id, batchCount, branchId, costOptionIndex, selectedORIndex }` | 确认交付            |
+| `confirmDelivery`     | `{ id, batchCount, branchId, costOptionIndex, selectedORIndex, costIds }` | 确认交付            |
+
+> `costIds` 是客户端选定的**物品实例 ID 列表**（`item:getID()`），服务器据此精确扣除，并校验其数量与品类恰好满足消耗项。
 
 ### 服务器 → 客户端
 
 | 指令             | 参数                           | 说明         |
 | ---------------- | ------------------------------ | ------------ |
 | `syncAll`        | `{ triggers, deliveryPoints }` | 全量状态同步 |
-| `namedMessage`   | `{ message, outputName }`      | 具名消息广播 |
+| `namedMessage`   | `{ message, outputName }`      | 广播消息（`BROADCAST` 模式，全服可见） |
 | `deliveryResult` | `{ action, message, reason }`  | 交付结果     |
 
 ---
@@ -206,7 +213,7 @@ EventTrigger/
     message     = "Trigger activated!",  -- 消息（≤500 字）
     delay       = 3,               -- 延迟（秒，≥0）
     range       = 2,               -- 范围（格，≥0.5）
-    outputType  = 7,               -- 输出模式（1-7）
+    outputType  = 7,               -- 输出模式（1-8，见下）
     outputName  = "",              -- 具名模式显示名（≤100 字）
     maxTriggers = -1,              -- 最大触发次数（-1 = 无限制）
     triggerCount = 0,              -- 已触发次数
@@ -244,6 +251,36 @@ EventTrigger/
 }
 ```
 
+### 输出模式枚举
+
+| 值  | 常量          | 说明             | 可见范围 |
+| --- | ------------- | ---------------- | -------- |
+| 1   | `NAMED`       | 具名系统频道     | 仅本地   |
+| 2   | `SAY`         | `/say` + 气泡    | 范围内   |
+| 3   | `DO`          | `/do` 环境旁白   | 范围内   |
+| 4   | `LOW`         | `/low` 低语      | 范围内   |
+| 5   | `YELL`        | `/yell` 喊叫     | 范围内   |
+| 6   | `OOC`         | `/ooc` 全局      | 范围内   |
+| 7   | `HALO`        | 头顶漂浮文字     | 仅本地   |
+| 8   | `BROADCAST`   | 服务器广播       | 全服     |
+
+### 物品条目结构
+
+`requiredItems` / `rewardItems` / `branches[].costOptions` / `branches[].rewards` 中的每一项：
+
+```lua
+{
+    fullType    = "Base.Key",   -- 脚本标识（匹配用，语言无关）
+    displayName = "钥匙",        -- 显示名（仅 UI 用，不参与匹配）
+    customName  = "",           -- 非空 = 要求"改名物品"（比自定义名，区分同 fullType 的多把实例）
+                                -- 空   = 要求"普通物品"（按 fullType 匹配，排除改名实例）
+    count       = 1,            -- 数量
+    collect     = true,         -- 仅 requiredItems：true = 移除（门槛 + 扣除）/ false = 仅检查
+}
+```
+
+> **匹配策略**：匹配键为 `fullType + customName`（`customName` 为玩家输入的自定义名，不翻译 → 跨语言安全）；实际扣款由客户端选定实例 ID、服务器按 ID 执行。
+
 ---
 
 ## 冷却模式
@@ -271,6 +308,7 @@ EventTrigger/
 
 ## 权限说明
 
+- **仅联机**：本模组仅面向多人服务器，单机（SP）下不加载、不执行。
 - **管理员**（`getAccessLevel() == "admin"`）：
   - 可见右键菜单全部选项
   - 可操作所有触发器 / 交付点
@@ -286,7 +324,10 @@ EventTrigger/
 
 - **Project Zomboid**：B42（主路径 `42/media/lua/server/EventTrigger/Server.lua`）
 - **联机模式**：服务器 JSON 权威，客户端本地缓存
+- **仅支持多人服务器**：单机（SP）不加载
 - **旧数据迁移**：首次加载自动将 `ModData.EventTrigger` 中的触发器迁移到 JSON 文件
+
+> ⚠️ **升级提示**：早期版本的配送点未记录 `customName`，其物品条目会被视为"普通物品"（要求未改名实例）。若需要"必须持有某个改名实例"的语义，请重新编辑该配送点并重新选择物品。
 
 ---
 
@@ -295,6 +336,7 @@ EventTrigger/
 - PZ 无文件删除 API，删除操作仅从索引中移除，旧 JSON 文件仍保留在磁盘（标记 `_deleted = true`）。
 - 触发历史保留最近 50 条（超出自动裁剪），`recordTrigger` 不实时广播以减少网络开销。
 - 交付点分支模型下，`selectedORIndex` 仅在旧版 `any` 模式下生效。
+- 物品实例 ID 为运行时瞬态，不持久化；玩家在确认与服务器处理之间移动/消耗物品会导致该次兑换被拒绝。
 - UI 布局在极小分辨率下会被 `fitW / fitH` 钳制到屏幕 94%。
 
 ---
