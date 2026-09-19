@@ -1,6 +1,6 @@
 -- ============================================================
--- EventTrigger/EventTriggerPersistence.lua — JSON file I/O (ElyonLib)
--- References BulletinBoard/Persistence.lua implementation pattern
+-- EventTrigger/EventTriggerPersistence.lua — JSON 文件读写（基于 ElyonLib）
+-- 参考 BulletinBoard/Persistence.lua 的实现模式
 -- ============================================================
 
 local JSON = require("ElyonLib/FileUtils/JSON")
@@ -9,10 +9,10 @@ local Shared = require("EventTriggerShared")
 local Persistence = {}
 
 -- ============================================================
--- Low-level utility functions
+-- 底层工具函数
 -- ============================================================
 
--- Read JSON file, return nil on failure
+-- 读取 JSON 文件，失败时返回 nil
 local function readJsonQuiet(filePath)
     local reader = getFileReader(filePath, false)
     if not reader then return nil end
@@ -30,7 +30,7 @@ local function readJsonQuiet(filePath)
     return nil
 end
 
--- Write JSON file, return success/failure
+-- 写入 JSON 文件，返回成功/失败
 local function writeJsonQuiet(filePath, data)
     local ok, content = pcall(JSON.stringify, data)
     if not ok then return false end
@@ -42,10 +42,10 @@ local function writeJsonQuiet(filePath, data)
 end
 
 -- ============================================================
--- Trigger JSON file operations
+-- 触发器 JSON 文件操作
 -- ============================================================
 
--- Load all triggers from disk (via index.json index file)
+-- 从磁盘加载全部触发器（通过 index.json 索引文件）
 function Persistence.loadTriggers()
     local index = readJsonQuiet(Shared.INDEX_FILE)
     if type(index) ~= "table" or type(index.triggerIds) ~= "table" then
@@ -56,7 +56,7 @@ function Persistence.loadTriggers()
         local filePath = Shared.DATA_DIR .. "/" .. index.triggerIds[i] .. ".json"
         local trigger = readJsonQuiet(filePath)
         if type(trigger) == "table" and trigger.id then
-            -- Fill in potentially missing fields (backward compatibility)
+            -- 补齐可能缺失的字段（向后兼容）
             trigger.triggerCount  = trigger.triggerCount or 0
             trigger.range          = trigger.range or 2
             trigger.delay          = trigger.delay or 3
@@ -71,10 +71,10 @@ function Persistence.loadTriggers()
     return triggers
 end
 
--- Save all triggers to disk (one JSON file per trigger + index.json)
+-- 将全部触发器写入磁盘（每个触发器一个 JSON 文件 + index.json）
 function Persistence.saveTriggers(triggers)
     triggers = type(triggers) == "table" and triggers or {}
-    -- Limit max count (remove oldest)
+    -- 数量上限限制（超出时丢弃最旧的）
     if #triggers > Shared.MAX_TRIGGERS then
         local keep = {}
         for i = #triggers - Shared.MAX_TRIGGERS + 1, #triggers do
@@ -96,13 +96,13 @@ function Persistence.saveTriggers(triggers)
     return ok
 end
 
--- Save single trigger to disk and update index (incremental update, efficient)
+-- 保存单个触发器到磁盘并更新索引（增量更新，效率更高）
 function Persistence.saveOneTrigger(trigger)
     if type(trigger) ~= "table" or not trigger.id then return false end
-    -- Write trigger file
+    -- 写入触发器文件
     local filePath = Shared.DATA_DIR .. "/" .. trigger.id .. ".json"
     if not writeJsonQuiet(filePath, trigger) then return false end
-    -- Update index (append ID if not in index)
+    -- 更新索引（若 ID 不在索引中则追加）
     local index = readJsonQuiet(Shared.INDEX_FILE)
     local triggerIds = {}
     if type(index) == "table" and type(index.triggerIds) == "table" then
@@ -118,12 +118,12 @@ function Persistence.saveOneTrigger(trigger)
     return writeJsonQuiet(Shared.INDEX_FILE, Shared.makeIndexData(triggerIds))
 end
 
--- Delete single trigger from disk and update index
+-- 从磁盘删除单个触发器并更新索引
 function Persistence.deleteOneTrigger(triggerId)
-    -- PZ has no file deletion API, write empty table marker
+    -- PZ 无文件删除 API，写入空表标记
     local filePath = Shared.DATA_DIR .. "/" .. triggerId .. ".json"
     writeJsonQuiet(filePath, { _deleted = true, id = triggerId })
-    -- Remove from index
+    -- 从索引中移除
     local index = readJsonQuiet(Shared.INDEX_FILE)
     local triggerIds = {}
     if type(index) == "table" and type(index.triggerIds) == "table" then
@@ -137,15 +137,15 @@ function Persistence.deleteOneTrigger(triggerId)
 end
 
 -- ============================================================
--- Trigger history JSON file operations
+-- 触发器历史 JSON 文件操作
 -- ============================================================
 
--- Get trigger history file path
+-- 获取触发器历史文件路径
 local function historyFilePath(triggerId)
     return Shared.HISTORY_DIR .. "/" .. triggerId .. ".json"
 end
 
--- Load history for a specific trigger
+-- 加载指定触发器的历史记录
 function Persistence.loadHistory(triggerId)
     local data = readJsonQuiet(historyFilePath(triggerId))
     if type(data) == "table" and type(data.entries) == "table" then
@@ -154,10 +154,10 @@ function Persistence.loadHistory(triggerId)
     return {}
 end
 
--- Save history for a specific trigger (limit max entries)
+-- 保存指定触发器的历史记录（限制最大条目数）
 function Persistence.saveHistory(triggerId, entries)
     entries = type(entries) == "table" and entries or {}
-    -- Limit max entries
+    -- 条目数上限限制
     if #entries > Shared.MAX_HISTORY_PER_TRIGGER then
         local trimmed = {}
         for i = #entries - Shared.MAX_HISTORY_PER_TRIGGER + 1, #entries do
@@ -169,13 +169,13 @@ function Persistence.saveHistory(triggerId, entries)
     return writeJsonQuiet(historyFilePath(triggerId), data)
 end
 
--- Delete history file for a trigger
+-- 删除指定触发器的历史文件
 function Persistence.deleteHistory(triggerId)
     writeJsonQuiet(historyFilePath(triggerId), { _deleted = true, triggerId = triggerId })
     return true
 end
 
--- Append a history entry and save
+-- 追加一条历史记录并保存
 function Persistence.appendHistory(triggerId, entry)
     local entries = Persistence.loadHistory(triggerId)
     entries[#entries + 1] = entry

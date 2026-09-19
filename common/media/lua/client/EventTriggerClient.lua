@@ -1,16 +1,15 @@
 -- ============================================================
--- EventTriggerClient — client main logic (SP/MP shared)
--- Manages trigger CRUD, player detection, message scheduling, and UI
+-- EventTriggerClient — 客户端主逻辑（单机/联机共用）
+-- 负责触发器增删改查、玩家检测、消息调度与 UI
 -- ============================================================
 
 -- ============================================================
--- Bootstrap order (IMPORTANT):
---   1) Ensure EventTrigger / EventTrigger.Delivery globals exist BEFORE require,
---      so EventTriggerDelivery.lua can safely attach to them.
---   2) require dependencies.
---   3) Install stubs for any missing Delivery methods, so that ANY caller
---      (OnTick, context menu, UI buttons, server commands) never crashes
---      when the delivery module is unavailable.
+-- 引导顺序（重要）：
+--   1) 在 require 之前先确保 EventTrigger / EventTrigger.Delivery 全局表存在，
+--      以便 EventTriggerDelivery.lua 能安全地挂载到它们上面。
+--   2) require 依赖模块。
+--   3) 为缺失的 Delivery 方法安装占位桩，确保任何调用方
+--      （OnTick、右键菜单、UI 按钮、服务器指令）在交付模块不可用时不会崩溃。
 -- ============================================================
 EventTrigger = EventTrigger or {}
 EventTrigger.Delivery = EventTrigger.Delivery or {}
@@ -19,14 +18,14 @@ require "ISUI/ISTextBox"
 require "EventTriggerDelivery"
 
 do
-    -- Methods that should exist on EventTrigger.Delivery when the module loaded.
+    -- 当交付模块正常加载时，EventTrigger.Delivery 上应存在的方法列表。
     local expectedMethods = {
         "CheckPlayerInRange", "StartSetup", "EditDelivery", "DeleteDelivery",
         "ResetDelivery", "ShowHistory", "OnDeliveryResult",
         "CloseAllUIs", "Validate", "MatchItem", "CountItems",
     }
 
-    -- Stub return values so callers that expect (ok, msg) don't crash on nil.
+    -- 占位桩的返回值，避免期望 (ok, msg) 的调用方拿到 nil 后崩溃。
     local stubFactories = {
         Validate   = function() return false, "Delivery module not loaded" end,
         MatchItem  = function() return false end,
@@ -46,11 +45,11 @@ do
         end
     end
 
-    -- State tables consumed across the module.
+    -- 模块间共享的状态表。
     EventTrigger.Delivery._activePrompt = EventTrigger.Delivery._activePrompt or {}
     EventTrigger.Delivery._pendingDpId  = EventTrigger.Delivery._pendingDpId  or {}
 
-    -- Single, prominent warning if the module did not load.
+    -- 若模块未加载，只打印一条醒目的警告。
     EventTrigger.DeliveryLoaded = (#missing == 0)
     if #missing > 0 then
         print("[EventTrigger-CLIENT] EventTriggerDelivery NOT loaded. Stubbed: " .. table.concat(missing, ", "))
@@ -68,15 +67,15 @@ EventTrigger._editIndex = nil
 EventTrigger._mode = "local"
 EventTrigger.DEBUG = true
 
--- Debug output function, controlled by EventTrigger.DEBUG flag
+-- 调试输出函数，由 EventTrigger.DEBUG 开关控制
 local function dbg(...)
     if EventTrigger.DEBUG then
         print("[EventTrigger-CLIENT]", ...)
     end
 end
 
--- UTF-8 safe text fitting: trim text to fit within maxWidth pixels (appends "...")
--- Iterates UTF-8 characters (not bytes) so CJK text is never split mid-codepoint.
+-- UTF-8 安全文本适配：将文本裁剪至 maxWidth 像素内（末尾附加 "..."）
+-- 按 UTF-8 字符（而非字节）迭代，避免 CJK 文本被从码点中间截断。
 function EventTrigger.fitText(text, font, maxWidth)
     text = tostring(text or "")
     if not maxWidth or maxWidth <= 0 then return text end
@@ -96,10 +95,10 @@ function EventTrigger.fitText(text, font, maxWidth)
     return out .. ellipsis
 end
 
--- Global UI scale factor: enlarges all windows and spacing (~1.75x) to reduce crowding.
+-- 全局 UI 缩放系数：放大所有窗口和间距（约 1.75 倍）以减少拥挤。
 EventTrigger.US = 1.5
 
--- Clamp a window dimension to the visible screen (leave a small margin).
+-- 将窗口宽度限制在可见屏幕内（留出小边距）。
 function EventTrigger.fitW(baseW)
     local sw = getCore():getScreenWidth()
     return math.min(math.floor(baseW * EventTrigger.US), math.floor(sw * 0.94))
@@ -110,17 +109,17 @@ function EventTrigger.fitH(baseH)
     return math.min(math.floor(baseH * EventTrigger.US), math.floor(sh * 0.94))
 end
 
--- Measure the true width PZ will give a button (ISButton auto-expands to fit title).
+-- 测量 PZ 实际给按钮分配的宽度（ISButton 会自动扩展以适配标题）。
 function EventTrigger.btnW(title)
     return getTextManager():MeasureStringX(UIFont.Small, title) + 10
 end
 
 -- ============================================================
--- Cooldown helpers (wall clock vs game clock)
+-- 冷却辅助（真实时钟 vs 游戏时钟）
 -- ============================================================
-EventTrigger.COOLDOWN_NONE = 0  -- no cooldown
-EventTrigger.COOLDOWN_WALL = 1  -- real / wall clock (os.time seconds)
-EventTrigger.COOLDOWN_GAME = 2  -- in-game clock (world age seconds)
+EventTrigger.COOLDOWN_NONE = 0  -- 无冷却
+EventTrigger.COOLDOWN_WALL = 1  -- 真实/墙上时钟（os.time 秒）
+EventTrigger.COOLDOWN_GAME = 2  -- 游戏内时钟（世界年龄秒）
 
 local function clampInt(v)
     v = tonumber(v)
@@ -141,7 +140,7 @@ function EventTrigger.makeCooldown(args)
     local hours   = clampInt(src.hours or src.cooldownHours)
     local minutes = clampInt(src.minutes or src.cooldownMinutes)
 
-    -- Legacy delivery fields: cooldownType (0=none,1=game,2=real) + cooldownValue (minutes)
+    -- 兼容旧版交付字段：cooldownType（0=无,1=游戏,2=真实）+ cooldownValue（分钟）
     local legacyType = tonumber(src.cooldownType) or 0
     local legacyValue = tonumber(src.cooldownValue) or 0
     if legacyValue > 0 and years == 0 and months == 0 and days == 0 and hours == 0 and minutes == 0 then
@@ -200,7 +199,7 @@ function EventTrigger.formatCooldown(cd)
     return modeStr .. " " .. table.concat(parts, " ")
 end
 
--- True when a trigger is ready to fire (global cooldown elapsed).
+-- 当触发器可以再次触发时返回 true（全局冷却已过）。
 function EventTrigger.isTriggerCooldownReady(t)
     local cd = t.cooldown or {}
     if EventTrigger.isCooldownZero(cd) then return true end
@@ -209,18 +208,18 @@ function EventTrigger.isTriggerCooldownReady(t)
     return (now - t.lastTriggerAt) >= EventTrigger.cooldownDurationSeconds(cd)
 end
 
--- Trigger message output mode enum (corresponds to MongooseChat channels)
+-- 触发器消息输出模式枚举（对应 MongooseChat 频道）
 EventTrigger.OutputType = {
-    NAMED = 1,  -- Named + system channel (blue)
-    SAY   = 2,  -- /say  triggerer identity + bubble
-    DO    = 3,  -- /do   environment narration
-    LOW   = 4,  -- /low  whisper + bubble
-    YELL  = 5,  -- /yell shout + bubble
-    OOC   = 6,  -- /ooc  global OOC
-    HALO  = 7,  -- Floating text above head (no chat log)
+    NAMED = 1,  -- 具名 + 系统频道（蓝色）
+    SAY   = 2,  -- /say  触发者身份 + 气泡
+    DO    = 3,  -- /do   环境旁白
+    LOW   = 4,  -- /low  低语 + 气泡
+    YELL  = 5,  -- /yell 大喊 + 气泡
+    OOC   = 6,  -- /ooc  全局 OOC
+    HALO  = 7,  -- 头顶漂浮文字（不写入聊天日志）
 }
 
--- Output type name lookup (for UI display)
+-- 输出类型名称查找表（用于 UI 显示）
 local OutputTypeNames = {
     [1] = getText("UI_ET_Out_Named"),
     [2] = getText("UI_ET_Out_Say"),
@@ -231,24 +230,24 @@ local OutputTypeNames = {
     [7] = getText("UI_ET_Out_Halo"),
 }
 
--- Get stable player identifier (prefer Steam username, fallback "unknown")
+-- 获取稳定的玩家标识（优先 Steam 用户名，回退为 "unknown"）
 local function GetPlayerIdentifier(player)
     if not player then return "unknown" end
     return player:getUsername() or "unknown"
 end
 
--- Check if current player is admin
+-- 判断当前玩家是否为管理员
 function EventTrigger.IsAdmin()
     local player = getPlayer()
     return player and player:getAccessLevel() == "admin"
 end
 
--- Get current player ID
+-- 获取当前玩家 ID
 function EventTrigger.GetCurrentPlayerId()
     return GetPlayerIdentifier(getPlayer())
 end
 
--- Get user config (Global ModData storage, per-player)
+-- 获取用户配置（Global ModData 存储，按玩家区分）
 function EventTrigger.GetConfig()
     local data = ModData.getOrCreate("EventTrigger")
     local cfg = data.config or {}
@@ -258,14 +257,14 @@ function EventTrigger.GetConfig()
     }
 end
 
--- Set user config key (e.g. outputName, defaultRange)
+-- 设置用户配置项（如 outputName、defaultRange）
 function EventTrigger.SetConfig(key, value)
     local data = ModData.getOrCreate("EventTrigger")
     if not data.config then data.config = {} end
     data.config[key] = value
 end
 
--- Detect multiplayer mode (world:getGameMode(), more reliable than isClient())
+-- 检测是否处于联机模式（用 world:getGameMode()，比 isClient() 更可靠）
 function EventTrigger.IsMultiplayer()
     local world = getWorld()
     if world then
@@ -274,24 +273,24 @@ function EventTrigger.IsMultiplayer()
     return false
 end
 
--- Get square at given coordinates
+-- 获取指定坐标的格子
 function EventTrigger.GetSquare(x, y, z)
     local cell = getCell()
     if not cell then return nil end
     return cell:getGridSquare(x, y, z)
 end
 
--- Auto-increment ID counter (generate unique trigger IDs, collision-free across clients)
+-- 自增 ID 计数器（生成唯一触发器 ID，跨客户端不冲突）
 EventTrigger._idCounter = EventTrigger._idCounter or 0
 
--- Generate unique trigger ID (prefix "trig_" + Unix timestamp + auto-increment)
+-- 生成唯一触发器 ID（前缀 "trig_" + Unix 时间戳 + 自增序号）
 function EventTrigger._generateId()
     EventTrigger._idCounter = EventTrigger._idCounter + 1
     return "trig_" .. tostring(os.time()) .. "_" .. tostring(EventTrigger._idCounter)
 end
 
--- Write trigger data to square ModData (SP only)
--- In MP, server JSON files are authoritative, skip square writes
+-- 将触发器数据写入格子 ModData（仅单机）
+-- 联机模式下由服务器 JSON 文件为准，跳过格子写入
 function EventTrigger.WriteToSquare(x, y, z, data)
     if EventTrigger.IsMultiplayer() then return true end
     local sq = EventTrigger.GetSquare(x, y, z)
@@ -304,14 +303,14 @@ function EventTrigger.WriteToSquare(x, y, z, data)
     return true
 end
 
--- Read all trigger data from a square
+-- 从格子读取全部触发器数据
 function EventTrigger.ReadFromSquare(x, y, z)
     local sq = EventTrigger.GetSquare(x, y, z)
     if not sq then return nil end
     return sq:getModData().EventTrigger
 end
 
--- Update specific trigger fields on a square by ID (SP only)
+-- 按 ID 更新格子上的指定触发器字段（仅单机）
 function EventTrigger.UpdateSquareTrigger(id, x, y, z, partialData)
     if EventTrigger.IsMultiplayer() then return true end
     local sq = EventTrigger.GetSquare(x, y, z)
@@ -331,7 +330,7 @@ function EventTrigger.UpdateSquareTrigger(id, x, y, z, partialData)
     return false
 end
 
--- Remove trigger from square by ID (SP only)
+-- 按 ID 从格子中移除触发器（仅单机）
 function EventTrigger.RemoveFromSquare(id, x, y, z)
     if EventTrigger.IsMultiplayer() then return true end
     local sq = EventTrigger.GetSquare(x, y, z)
@@ -349,7 +348,7 @@ function EventTrigger.RemoveFromSquare(id, x, y, z)
     return false
 end
 
--- Clear all trigger data from a square (SP only)
+-- 清空格子上的全部触发器数据（仅单机）
 function EventTrigger.ClearFromSquare(x, y, z)
     if EventTrigger.IsMultiplayer() then return true end
     local sq = EventTrigger.GetSquare(x, y, z)
@@ -360,8 +359,8 @@ function EventTrigger.ClearFromSquare(x, y, z)
     return true
 end
 
--- Scan 30-cell radius around player, collect trigger data
--- Returns trigger list with coordinate info (compatible with legacy single-object format)
+-- 扫描玩家周围 30 格范围，收集触发器数据
+-- 返回带坐标信息的触发器列表（兼容旧版单对象格式）
 function EventTrigger.ScanNearbySquares()
     local player = getPlayer()
     if not player then return {} end
@@ -404,12 +403,12 @@ function EventTrigger.ScanNearbySquares()
     return found
 end
 
--- Generate unique key string from coordinates (for coordinate matching)
+-- 由坐标生成唯一键字符串（用于坐标匹配）
 function EventTrigger._makeKey(x, y, z)
     return tostring(math.floor(x or 0)) .. "_" .. tostring(math.floor(y or 0)) .. "_" .. tostring(math.floor(z or 0))
 end
 
--- Find trigger index by ID in runtime list
+-- 在运行时列表中按 ID 查找触发器索引
 function EventTrigger._findIndexById(id)
     for i, t in ipairs(EventTrigger.triggers) do
         if t.id == id then return i end
@@ -417,8 +416,8 @@ function EventTrigger._findIndexById(id)
     return nil
 end
 
--- Rebuild runtime trigger list from nearby squares (SP only)
--- In MP, server JSON files are authoritative; syncAll provides full list
+-- 从周围格子重建运行时触发器列表（仅单机）
+-- 联机模式下由服务器 JSON 文件为准；syncAll 会提供完整列表
 function EventTrigger.RebuildList()
     if EventTrigger.IsMultiplayer() then
         dbg("RebuildList: MP mode, skipped (server is authoritative)")
@@ -427,7 +426,7 @@ function EventTrigger.RebuildList()
     local scanned = EventTrigger.ScanNearbySquares()
     local changed = false
 
-    -- Build set of scanned IDs to detect triggers removed from squares
+    -- 构建扫描到的 ID 集合，用于检测已从格子中移除的触发器
     local scannedIds = {}
     for _, td in ipairs(scanned) do
         if td.id then scannedIds[td.id] = true end
@@ -437,11 +436,11 @@ function EventTrigger.RebuildList()
         local idx = EventTrigger._findIndexById(td.id)
         if idx then
             local t = EventTrigger.triggers[idx]
-            -- Use max triggerCount if square has a newer value
+            -- 若格子中的 triggerCount 更新，取较大者
             if td.triggerCount and td.triggerCount > (t.triggerCount or 0) then
                 t.triggerCount = td.triggerCount
             end
-            -- Restore triggeredBy from square if local has none
+            -- 若本地无触发历史，则从格子恢复
             if td.triggeredBy and #td.triggeredBy > 0 and (not t.triggeredBy or #t.triggeredBy == 0) then
                 t.triggeredBy = td.triggeredBy
             end
@@ -453,12 +452,12 @@ function EventTrigger.RebuildList()
             t.maxTriggers = td.maxTriggers or t.maxTriggers
             t.creator = td.creator or t.creator
             t.enabled = td.enabled ~= false
-            -- Update coordinates (retain compatibility)
+            -- 更新坐标（保持兼容）
             t.x = td.x
             t.y = td.y
             t.z = td.z
         else
-            -- Restore persisted triggerCount + triggeredBy from square ModData
+            -- 从格子 ModData 中恢复已持久化的 triggerCount + triggeredBy
             local restoredCount = td.triggerCount or 0
             local restoredHistory = td.triggeredBy or {}
             table.insert(EventTrigger.triggers, {
@@ -485,9 +484,9 @@ function EventTrigger.RebuildList()
         end
     end
 
-    -- Clean entries in local list that are within scan range but no longer on squares
-    -- Second line of defense against "multiplayer delete desync":
-    -- Even if _removeMissingFromServer doesn't fire, RebuildList detects and removes them
+    -- 清理本地列表中位于扫描范围内、但已不在格子上的条目
+    -- 针对"联机删除不同步"的第二道防线：
+    -- 即使 _removeMissingFromServer 未触发，RebuildList 也能检测并移除它们
     local player = getPlayer()
     if player then
         local psq = player:getSquare()
@@ -500,7 +499,7 @@ function EventTrigger.RebuildList()
                 local dx = math.abs((t.x or 0) - px)
                 local dy = math.abs((t.y or 0) - py)
                 local dz = math.abs((t.z or 0) - pz)
-                -- Keep if outside scan range (may be in another area), remove if in range but absent from square
+                -- 在扫描范围之外则保留（可能位于其他区域）；在范围内但格子中不存在则移除
                 if dx > area or dy > area or dz > 1 or scannedIds[t.id] then
                     table.insert(newList, t)
                 else
@@ -522,13 +521,13 @@ function EventTrigger.RebuildList()
     dbg("RebuildList: scanned", #scanned, "triggers from squares, total in list:", #EventTrigger.triggers)
 end
 
--- Dual-mode execution: local update first (optimistic UI), then send to server for authoritative persistence in MP
--- Server syncAll provides final reconciliation
--- Uses sendClientCommand (same as BulletinBoard), received by server OnClientCommand
+-- 双模式执行：先本地更新（乐观 UI），再在联机模式下发送到服务器进行权威持久化
+-- 服务器 syncAll 会提供最终对账
+-- 使用 sendClientCommand（与 BulletinBoard 相同），由服务器 OnClientCommand 接收
 function EventTrigger.SendCommand(command, args)
     args = args or {}
     dbg("SendCommand:", command, "multiplayer=", tostring(EventTrigger.IsMultiplayer()))
-    -- Always execute locally first for immediate UI feedback
+    -- 总是先本地执行，以获得即时的 UI 反馈
     EventTrigger.ExecuteLocal(command, args)
     if EventTrigger.IsMultiplayer() then
         sendClientCommand("EventTrigger", command, args)
@@ -536,7 +535,7 @@ function EventTrigger.SendCommand(command, args)
     end
 end
 
--- Execute command locally (SP/MP shared): update ModData, then refresh list and UI
+-- 本地执行指令（单机/联机共用）：更新 ModData，随后刷新列表和 UI
 function EventTrigger.ExecuteLocal(command, args)
     if command == "placeTrigger" then
         local x, y, z = args.x, args.y, args.z
@@ -557,7 +556,7 @@ function EventTrigger.ExecuteLocal(command, args)
         if not EventTrigger.WriteToSquare(x, y, z, sqData) then
             dbg("placeTrigger FAILED: square not loaded at", x, y, z)
         end
-        -- MP: insert directly into local list (WriteToSquare and RebuildList skip squares in MP)
+        -- 联机模式：直接插入本地列表（联机下 WriteToSquare 与 RebuildList 会跳过格子操作）
         if EventTrigger.IsMultiplayer() then
             table.insert(EventTrigger.triggers, {
                 id = triggerId,
@@ -596,7 +595,7 @@ function EventTrigger.ExecuteLocal(command, args)
             t.triggerCount = 0
             t.triggeredBy = {}
             t.inRangePlayers = {}
-            -- Sync zero out count and history in square ModData
+            -- 将计数与历史同步清零到格子 ModData
             EventTrigger.UpdateSquareTrigger(t.id, t.x, t.y, t.z, { triggerCount = 0, triggeredBy = {} })
             EventTrigger._saveToModData()
             if EventTrigger._ui then EventTrigger._ui:refreshList() end
@@ -685,7 +684,7 @@ function EventTrigger.ExecuteLocal(command, args)
             EventTrigger._saveToModData()
         end
 
-    -- Also write triggerCount to square ModData for persistence (SP only)
+    -- 同时把 triggerCount 写入格子 ModData 以持久化（仅单机）
     elseif command == "recordTrigger" then
         local idx = args.index
         if idx and idx >= 1 and idx <= #EventTrigger.triggers then
@@ -701,7 +700,7 @@ function EventTrigger.ExecuteLocal(command, args)
             if not EventTrigger.isCooldownZero(cd) then
                 t.lastTriggerAt = EventTrigger.cooldownNowSeconds(cd.mode)
             end
-            -- Critical: sync write to square ModData (SP only)
+            -- 关键：同步写入格子 ModData（仅单机）
             if not EventTrigger.IsMultiplayer() then
                 local recent = {}
                 local total = #t.triggeredBy
@@ -720,10 +719,10 @@ function EventTrigger.ExecuteLocal(command, args)
     end
 end
 
--- Remove triggers in local list that don't exist on server (server is authoritative)
--- Solves MP delete desync: RebuildList() only adds, never removes,
--- so we need the server list to clean stale local entries
--- Also cleans square ModData to prevent RebuildList from re-scanning them back
+-- 移除本地列表中在服务器上已不存在的触发器（服务器为权威）
+-- 解决联机删除不同步问题：RebuildList() 只会新增，从不移除，
+-- 因此需要服务器列表来清理本地陈旧条目
+-- 同时清理格子 ModData，防止 RebuildList 再次扫回它们
 function EventTrigger._removeMissingFromServer(serverTriggers)
     local serverIds = {}
     for _, st in ipairs(serverTriggers) do
@@ -735,7 +734,7 @@ function EventTrigger._removeMissingFromServer(serverTriggers)
         if serverIds[t.id] then
             table.insert(newList, t)
         else
-            -- Also remove from square ModData to prevent RebuildList from re-scanning them
+            -- 同时从格子 ModData 中移除，防止 RebuildList 再次扫回
             EventTrigger.RemoveFromSquare(t.id, t.x, t.y, t.z)
             removed = removed + 1
             dbg("_removeMissingFromServer: removed stale trigger id=" .. tostring(t.id) .. " from list + square")
@@ -748,21 +747,21 @@ function EventTrigger._removeMissingFromServer(serverTriggers)
     end
 end
 
--- Forward declaration: GetMongooseChatPanel is defined later (MongooseChat integration section)
--- OnServerCommand and ShowChatMessage reference it before its definition.
+-- 前向声明：GetMongooseChatPanel 稍后定义（MongooseChat 集成部分）
+-- OnServerCommand 和 ShowChatMessage 会在此定义之前引用它。
 local GetMongooseChatPanel
 
--- Server command callback: syncAll → full list replacement (server JSON is authoritative)
--- namedMessage → NAMED broadcast
+-- 服务器指令回调：syncAll → 全量列表替换（服务器 JSON 为权威）
+-- namedMessage → NAMED 广播
 function EventTrigger.OnServerCommand(module, command, args)
     if module ~= "EventTrigger" then
         return
     end
     dbg("OnServerCommand: received command=", command)
     if command == "syncAll" then
-        -- MP: server JSON files are authoritative, fully replace local list
+        -- 联机：服务器 JSON 文件为权威，完全替换本地列表
         if EventTrigger.IsMultiplayer() and args and args.triggers then
-            -- Preserve local runtime state (inRangePlayers), rebuild from server data
+            -- 保留本地运行时状态（inRangePlayers），基于服务器数据重建
             local oldInRange = {}
             for _, t in ipairs(EventTrigger.triggers) do
                 if t.id and t.inRangePlayers then
@@ -795,7 +794,7 @@ function EventTrigger.OnServerCommand(module, command, args)
             EventTrigger.triggers = newList
             dbg("OnServerCommand: replaced trigger list from server, count=", #newList)
 
-            -- Process delivery points from server sync (preserve _dlvPrompted per-object, like trigger inRangePlayers)
+            -- 处理服务器同步过来的交付点（像触发器 inRangePlayers 一样，按对象保留 _dlvPrompted）
             if args.deliveryPoints then
                 local oldDlvState = {}
                 for _, oldDp in ipairs(EventTrigger.deliveryPoints) do
@@ -833,7 +832,7 @@ function EventTrigger.OnServerCommand(module, command, args)
                 end
             end
         else
-            -- SP fallback: rebuild from square ModData scan
+            -- 单机回退：从格子 ModData 扫描重建
             EventTrigger.RebuildList()
             if args and args.triggers then
                 EventTrigger._mergeHistory(args.triggers)
@@ -844,7 +843,7 @@ function EventTrigger.OnServerCommand(module, command, args)
             EventTrigger._ui:refreshList()
         end
     elseif command == "namedMessage" then
-        -- NAMED mode server broadcast: show panel message on all clients
+        -- NAMED 模式服务器广播：在所有客户端显示面板消息
         local mcPanel = type(GetMongooseChatPanel) == "function" and GetMongooseChatPanel() or nil
         if mcPanel and args then
             local cfg = EventTrigger.GetConfig()
@@ -859,7 +858,7 @@ function EventTrigger.OnServerCommand(module, command, args)
             })
         end
     elseif command == "deliveryResult" then
-        -- Delivery stub guarantees OnDeliveryResult exists, but guard against whole-table replacement
+        -- 交付占位桩保证 OnDeliveryResult 存在，但仍需防止整表被替换
         local player = getPlayer()
         if args and player then
             local success = (args.action == "completed")
@@ -872,7 +871,7 @@ function EventTrigger.OnServerCommand(module, command, args)
     end
 end
 
--- Get current in-game timestamp (numeric time + formatted "Day X HH:MM")
+-- 获取当前游戏内时间戳（数值时间 + 格式化的 "Day X HH:MM"）
 function EventTrigger.GetTimestamp()
     local gt = getGameTime()
     if not gt then return 0, "" end
@@ -883,7 +882,7 @@ function EventTrigger.GetTimestamp()
         string.format("Day %d %02d:%02d", (day or 0) + 1, hour or 0, min or 0)
 end
 
--- Persist runtime stats to Global ModData (SP only)
+-- 将运行时统计数据持久化到 Global ModData（仅单机）
 function EventTrigger._saveToModData()
     if EventTrigger.IsMultiplayer() then return end
     local data = ModData.getOrCreate("EventTrigger")
@@ -891,8 +890,8 @@ function EventTrigger._saveToModData()
     data.deliveryPoints = EventTrigger.deliveryPoints
 end
 
--- Merge source history into runtime list (match by ID, merge history fields only)
--- SP only; in MP, history is served via server syncAll
+-- 将来源历史合并进运行时列表（按 ID 匹配，仅合并历史字段）
+-- 仅单机；联机下历史通过服务器 syncAll 下发
 function EventTrigger._mergeHistory(sourceTriggers)
     if not sourceTriggers then
         dbg("_mergeHistory: sourceTriggers is nil, skipping")
@@ -911,7 +910,7 @@ function EventTrigger._mergeHistory(sourceTriggers)
                 end
                 if src.triggeredBy and #src.triggeredBy > 0 then
                     t.triggeredBy = src.triggeredBy
-                    -- Also write back to square ModData for square persistence
+                    -- 同时写回格子 ModData 以实现格子持久化
                     EventTrigger.UpdateSquareTrigger(t.id, t.x, t.y, t.z, { triggeredBy = src.triggeredBy })
                     dbg("_mergeHistory: id=" .. src.id .. " restored " .. #src.triggeredBy .. " history entries + wrote to square")
                 end
@@ -924,9 +923,9 @@ function EventTrigger._mergeHistory(sourceTriggers)
     EventTrigger._saveToModData()
 end
 
--- Game startup load entry
--- SP: scan from square ModData, migrate from legacy Global if empty
--- MP: request sync from server (server JSON files are authoritative)
+-- 游戏启动加载入口
+-- 单机：从格子 ModData 扫描，若为空则从旧版 Global 迁移
+-- 联机：向服务器请求同步（服务器 JSON 文件为权威）
 function EventTrigger.Load()
     if not EventTrigger.IsMultiplayer() then
         dbg("Load: single-player not supported, skipping")
@@ -937,7 +936,7 @@ function EventTrigger.Load()
         EventTrigger.RequestSync()
         return
     end
-    -- SP path: load from square ModData / Global ModData
+    -- 单机路径：从格子 ModData / Global ModData 加载
     local data = ModData.getOrCreate("EventTrigger")
     local saved = data.triggers
     local hasSaved = (saved and type(saved) == "table" and #saved > 0)
@@ -949,7 +948,7 @@ function EventTrigger.Load()
         EventTrigger._mergeHistory(saved)
     end
 
-    -- SP: Load delivery points from Global ModData
+    -- 单机：从 Global ModData 加载交付点
     if data.deliveryPoints and type(data.deliveryPoints) == "table" and #data.deliveryPoints > 0 then
         EventTrigger.deliveryPoints = {}
         for _, dp in ipairs(data.deliveryPoints) do
@@ -1008,7 +1007,7 @@ function EventTrigger.Load()
     dbg("Load: loaded", #EventTrigger.triggers, "triggers")
 end
 
--- Request trigger sync from server (MP only)
+-- 向服务器请求触发器同步（仅联机）
 function EventTrigger.RequestSync(all)
     if EventTrigger.IsMultiplayer() then
         dbg("RequestSync: sending requestSync to server, all=", tostring(all))
@@ -1018,7 +1017,7 @@ function EventTrigger.RequestSync(all)
     end
 end
 
--- Get player's readable name (prefer Steam username, fallback to character name)
+-- 获取玩家可读名称（优先 Steam 用户名，回退到角色名）
 local function GetPlayerName(player)
     if not player then return "Player" end
     local name = player:getUsername()
@@ -1035,14 +1034,14 @@ local function GetPlayerName(player)
     return "Player"
 end
 
--- Convert output type number to readable name (UI display)
+-- 将输出类型数字转换为可读名称（UI 显示用）
 local function OutputTypeToName(ot)
     return OutputTypeNames[ot] or "Above Head"
 end
 
 -- ============================================================
--- MongooseChat integration: lazy-load MC_ChatPanel + dynamically register system channel
--- Use pcall require for safe loading, avoid crash if MongooseChat is not installed
+-- MongooseChat 集成：懒加载 MC_ChatPanel + 动态注册 system 频道
+-- 使用 pcall require 安全加载，未安装 MongooseChat 时避免崩溃
 -- ============================================================
 local _mcChatPanel = nil
 GetMongooseChatPanel = function()
@@ -1053,18 +1052,18 @@ GetMongooseChatPanel = function()
         dbg("MongooseChat integration: MC_ChatPanel module not available")
         return _mcChatPanel
     end
-    -- Get running panel instance (created by MongooseChat on init)
+    -- 获取正在运行的面板实例（由 MongooseChat 在 init 时创建）
     local instance = MC_ChatPanel.instance
     if not instance or not instance.addMessage then
         _mcChatPanel = false
         dbg("MongooseChat integration: MC_ChatPanel.instance not ready")
         return _mcChatPanel
     end
-    -- Dynamically register system channel (EventTrigger system messages)
+    -- 动态注册 system 频道（EventTrigger 系统消息）
     local ok2, MC_Config = pcall(require, "MC_Config")
     if ok2 and MC_Config then
         if not MC_Config.ChannelColors["system"] then
-            MC_Config.ChannelColors["system"] = {000, 191, 255}  -- Blue
+            MC_Config.ChannelColors["system"] = {000, 191, 255}  -- 蓝色
         end
         if not MC_Config.ChannelTags["system"] then
             MC_Config.ChannelTags["system"] = "[System]"
@@ -1075,7 +1074,7 @@ GetMongooseChatPanel = function()
     return _mcChatPanel
 end
 
--- Lazy-load MC_Bubble module, create speech bubbles (for say/do channels)
+-- 懒加载 MC_Bubble 模块，创建对话气泡（用于 say/do 频道）
 local _mcBubble = nil
 local function ShowMCBubble(bubbleType, player, msg)
     if not player then return end
@@ -1103,7 +1102,7 @@ local function ShowMCBubble(bubbleType, player, msg)
     end
 end
 
--- Create chat message object (satisfies ISChat.addLineInChat interface)
+-- 创建聊天消息对象（满足 ISChat.addLineInChat 接口）
 local function CreateChatMessage(text, author)
     local msg = { text = text, author = author }
     function msg:getTextWithPrefix()
@@ -1120,9 +1119,9 @@ local function CreateChatMessage(text, author)
     return msg
 end
 
--- Show trigger message
--- MP: voice channels via MongooseChat server pipeline, NAMED via EventTrigger server broadcast
--- SP: direct MC_ChatPanel + MC_Bubble calls
+-- 显示触发器消息
+-- 联机：语音频道走 MongooseChat 服务器管线，NAMED 走 EventTrigger 服务器广播
+-- 单机：直接调用 MC_ChatPanel + MC_Bubble
 local function ShowChatMessage(msg, triggerPlayer, outputType, outputName)
     local player = triggerPlayer or getPlayer()
     if not player then return end
@@ -1146,11 +1145,11 @@ local function ShowChatMessage(msg, triggerPlayer, outputType, outputName)
     if not ch then return end
 
     -- ================================================================
-    -- MP path: server pipeline, visible to all players in range
+    -- 联机路径：服务器管线，对范围内所有玩家可见
     -- ================================================================
     if EventTrigger.IsMultiplayer() then
         if ot == EventTrigger.OutputType.NAMED then
-            -- NAMED: show locally immediately + EventTrigger server broadcast to all clients
+            -- NAMED：本地立即显示 + EventTrigger 服务器广播给所有客户端
             local mcPanel = GetMongooseChatPanel()
             if mcPanel then
                 local cfg = EventTrigger.GetConfig()
@@ -1169,8 +1168,8 @@ local function ShowChatMessage(msg, triggerPlayer, outputType, outputName)
                 outputName = outputName,
             })
         else
-            -- SAY/LOW/YELL/DO/OOC: masquerade as player chat, MC server handles range calc + broadcast
-            -- All in-range clients automatically receive panel + bubble (via MC_Client.onChatMessage)
+            -- SAY/LOW/YELL/DO/OOC：伪装成玩家聊天，由 MC 服务器负责范围计算与广播
+            -- 所有范围内客户端会自动收到面板 + 气泡（通过 MC_Client.onChatMessage）
             sendClientCommand("MongooseChat", "ChatMessage", {
                 channel = ch.mc,
                 message = msg,
@@ -1181,7 +1180,7 @@ local function ShowChatMessage(msg, triggerPlayer, outputType, outputName)
     end
 
     -- ================================================================
-    -- SP path: direct MC_ChatPanel + MC_Bubble calls (no server)
+    -- 单机路径：直接调用 MC_ChatPanel + MC_Bubble（无服务器）
     -- ================================================================
     local mcPanel = GetMongooseChatPanel()
     if mcPanel then
@@ -1213,7 +1212,7 @@ local function ShowChatMessage(msg, triggerPlayer, outputType, outputName)
         return
     end
 
-    -- === Fallback (native ISChat / HALO) ===
+    -- === 回退方案（原生 ISChat / HALO） ===
     if not ISChat.instance then
         HaloTextHelper.addGoodText(player, msg)
         return
@@ -1239,7 +1238,7 @@ local function ShowChatMessage(msg, triggerPlayer, outputType, outputName)
     end
 end
 
--- Schedule delayed message: delayFrames = seconds * 60 (60fps), checked on OnTick
+-- 调度延迟消息：delayFrames = 秒数 * 60（60fps），在 OnTick 中检查
 function EventTrigger.ScheduleMessage(delayFrames, message, player, outputType, outputName)
     EventTrigger.timerIdCounter = EventTrigger.timerIdCounter + 1
     local timerId = "timer_" .. tostring(EventTrigger.tickCounter) .. "_" .. tostring(EventTrigger.timerIdCounter)
@@ -1254,7 +1253,7 @@ end
 
 EventTrigger._scanCounter = 0
 
--- Per-frame execution: periodic scan (~5s), player distance check, timer expiry handling
+-- 每帧执行：周期扫描（约 5 秒一次）、玩家距离检测、定时器到期处理
 function EventTrigger.OnTick()
     if not EventTrigger.IsMultiplayer() then return end
     EventTrigger.tickCounter = EventTrigger.tickCounter + 1
@@ -1302,7 +1301,7 @@ function EventTrigger.OnTick()
             end
         end
 
-        -- Delivery point detection (delegated to EventTriggerDelivery module; safe even if stubbed)
+        -- 交付点检测（委派给 EventTriggerDelivery 模块；即使被占位桩替代也安全）
         EventTrigger.Delivery.CheckPlayerInRange(player)
         idx = idx + 1
     end
@@ -1315,7 +1314,7 @@ function EventTrigger.OnTick()
     end
 end
 
--- Open main manager UI (prevent duplicates)
+-- 打开主管理 UI（防止重复打开）
 function EventTrigger.OpenUI()
     if EventTrigger._ui then
         EventTrigger._ui:close()
@@ -1325,14 +1324,14 @@ function EventTrigger.OpenUI()
     EventTrigger._ui:addToUIManager()
 end
 
--- Right-click world object menu: admin-only entries (place trigger + delivery point + manager)
+-- 右键世界物体菜单：仅管理员可见的条目（放置触发器 + 交付点 + 管理器）
 function EventTrigger.OnFillWorldObjectContextMenu(playerIndex, context, worldObjects, test)
     if test then return end
     if not EventTrigger.IsMultiplayer() then return end
     local player = getSpecificPlayer(playerIndex)
     if not player then return end
 
-    -- Only admins (or single-player host) may use the manager / place points.
+    -- 仅管理员（或单机主机）可以使用管理器 / 放置点位。
     local isAdmin = player:getAccessLevel() == "admin"
     if not isAdmin then return end
 
@@ -1343,7 +1342,7 @@ function EventTrigger.OnFillWorldObjectContextMenu(playerIndex, context, worldOb
         context:addOption(txt, nil, function()
             EventTrigger.PromptDelayRange(x, y, z)
         end)
-        -- Only offer delivery placement when the delivery module is actually available.
+        -- 仅在交付模块确实可用时才提供交付点放置入口。
         if EventTrigger.DeliveryLoaded then
             local dlvTxt = string.format("%s (%d,%d,%d)", getText("UI_ET_Ctx_SetDelivery"), x, y, z)
             context:addOption(dlvTxt, nil, function()
@@ -1356,9 +1355,9 @@ function EventTrigger.OnFillWorldObjectContextMenu(playerIndex, context, worldOb
 end
 
 -- ============================================================
--- EventTriggerTextPrompt — unified text input dialog
--- Replaces ISTextBox for wizard steps: proper multi-line prompt handling
--- and a spacious layout so the prompt never overlaps the input/buttons.
+-- EventTriggerTextPrompt — 统一文本输入对话框
+-- 替代 ISTextBox 用于向导步骤：正确的多行提示处理
+-- 以及宽敞的布局，使提示永不与输入框/按钮重叠。
 -- ============================================================
 EventTriggerTextPrompt = ISPanel:derive("EventTriggerTextPrompt")
 
@@ -1538,7 +1537,7 @@ function EventTriggerTextPrompt:prerender()
 end
 
 -- ============================================================
--- Shared drag handlers for modal prompts
+-- 模态对话框共享的拖动处理函数
 -- ============================================================
 local function promptMouseDown(self, x, y)
     if y >= 0 and y < 28 then
@@ -1576,7 +1575,7 @@ local function readIntEntry(entry)
 end
 
 -- ============================================================
--- EventTriggerChoicePrompt — button-based single-choice dialog
+-- EventTriggerChoicePrompt — 基于按钮的单选对话框
 -- ============================================================
 EventTriggerChoicePrompt = ISPanel:derive("EventTriggerChoicePrompt")
 EventTriggerChoicePrompt.onMouseDown = promptMouseDown
@@ -1647,7 +1646,7 @@ function EventTriggerChoicePrompt:create()
         cy = cy + self.btnH + self.gap
     end
 
-    -- Bottom buttons
+    -- 底部按钮
     local btnY = self.height - self.btnH - math.floor(12 * EventTrigger.US)
     local bx = self.pad
     local function place(title, handler)
@@ -1693,7 +1692,7 @@ function EventTriggerChoicePrompt:prerender()
 end
 
 -- ============================================================
--- EventTriggerNumberPrompt — numeric input with validation/clamp
+-- EventTriggerNumberPrompt — 带校验/范围钳制的数值输入框
 -- ============================================================
 EventTriggerNumberPrompt = ISPanel:derive("EventTriggerNumberPrompt")
 EventTriggerNumberPrompt.onMouseDown = promptMouseDown
@@ -1755,7 +1754,7 @@ function EventTriggerNumberPrompt:create()
     self.entry = ISTextEntryBox:new(self.defaultText, self.pad, self.entryY, self.width - self.pad * 2, self.entryH)
     self.entry:initialise()
     self.entry:instantiate()
-    -- Only restrict to digits when the field can't be negative (e.g. -1 = unlimited).
+    -- 仅当字段不允许负数（如 -1 = 无限制）时才限制为纯数字。
     if self.opts.integer and (self.opts.min == nil or self.opts.min >= 0) then
         self.entry:setOnlyNumbers(true)
     end
@@ -1825,7 +1824,7 @@ function EventTriggerNumberPrompt:prerender()
 end
 
 -- ============================================================
--- EventTriggerCooldownPrompt — mode buttons + Y/M/D/H/Min inputs
+-- EventTriggerCooldownPrompt — 模式按钮 + 年/月/日/时/分输入
 -- ============================================================
 EventTriggerCooldownPrompt = ISPanel:derive("EventTriggerCooldownPrompt")
 EventTriggerCooldownPrompt.onMouseDown = promptMouseDown
@@ -1896,7 +1895,7 @@ function EventTriggerCooldownPrompt:create()
     self.closeBtn:initialise()
     self:addChild(self.closeBtn)
 
-    -- Mode buttons (fixed width so the selected prefix never overflows)
+    -- 模式按钮（固定宽度，避免选中前缀 "> " 导致溢出）
     local modeDefs = {
         { EventTrigger.COOLDOWN_NONE, getText("UI_ET_Cd_None") },
         { EventTrigger.COOLDOWN_WALL, getText("UI_ET_Cd_Wall") },
@@ -1918,7 +1917,7 @@ function EventTriggerCooldownPrompt:create()
         self.modeButtons[m] = btn
     end
 
-    -- Five duration fields
+    -- 五个时长字段
     local fieldW = math.floor(90 * EventTrigger.US)
     local fgap = math.floor(12 * EventTrigger.US)
     local fTotal = fieldW * 5 + fgap * 4
@@ -1937,7 +1936,7 @@ function EventTriggerCooldownPrompt:create()
         self.entries[fd.key] = entry
     end
 
-    -- Bottom buttons
+    -- 底部按钮
     local okLabel = getText("UI_ET_Btn_OK")
     local cancelLabel = getText("UI_ET_Btn_Cancel")
     local backLabel = getText("UI_ET_Btn_Back")
@@ -2032,10 +2031,10 @@ function EventTriggerCooldownPrompt:prerender()
 end
 
 -- ============================================================
--- Placement wizard (multi-step input)
--- Step 1: Enter delay(seconds), range, max triggers
+-- 放置向导（多步输入）
+-- 第 1 步：输入延迟（秒）、范围、最大触发次数
 -- ============================================================
--- Output mode choices (shared by place + edit wizards)
+-- 输出模式选项（放置向导与编辑向导共用）
 EventTrigger.OUTPUT_CHOICES = {
     { label = getText("UI_ET_Out_Named_Desc"), value = EventTrigger.OutputType.NAMED },
     { label = getText("UI_ET_Out_Say_Desc"),   value = EventTrigger.OutputType.SAY },
@@ -2114,7 +2113,7 @@ function EventTrigger.PromptMaxTriggers()
     modal:addToUIManager()
 end
 
--- Step 4: Enter trigger message text
+-- 第 4 步：输入触发器消息文本
 function EventTrigger.PromptMessage2()
     local p = EventTrigger._pending
     local defaultText = (p.msg and #p.msg > 0) and p.msg or "Trigger activated!"
@@ -2133,7 +2132,7 @@ function EventTrigger.PromptMessage2()
     modal:addToUIManager()
 end
 
--- Step 5: Select output mode (button-based)
+-- 第 5 步：选择输出模式（基于按钮）
 function EventTrigger.PromptOutput2()
     local p = EventTrigger._pending
     local modal = EventTriggerChoicePrompt:new(
@@ -2155,7 +2154,7 @@ function EventTrigger.PromptOutput2()
     modal:addToUIManager()
 end
 
--- Step 5b (Named mode only): enter display name
+-- 第 5b 步（仅具名模式）：输入显示名称
 function EventTrigger.PromptOutputName2()
     local p = EventTrigger._pending
     local cfg = EventTrigger.GetConfig()
@@ -2175,7 +2174,7 @@ function EventTrigger.PromptOutputName2()
     modal:addToUIManager()
 end
 
--- Step 6: Cooldown (None / Wall Clock / Game Clock + duration)
+-- 第 6 步：冷却（无 / 真实时钟 / 游戏时钟 + 时长）
 function EventTrigger.PromptCooldown2()
     local p = EventTrigger._pending
     local modal = EventTriggerCooldownPrompt:new(
@@ -2196,7 +2195,7 @@ function EventTrigger.PromptCooldown2()
     modal:addToUIManager()
 end
 
--- Finalize placement: collect all params into args table, call SendCommand
+-- 完成放置：收集全部参数到 args 表，调用 SendCommand
 function EventTrigger.PlacePending()
     local p = EventTrigger._pending
     if not p then
@@ -2216,24 +2215,24 @@ function EventTrigger.PlacePending()
     EventTrigger._pending = nil
 end
 
--- UI shortcut: delete trigger at index
+-- UI 快捷方式：删除指定索引的触发器
 function EventTrigger.DeleteTrigger(index)
     local t = EventTrigger.triggers[index]
     EventTrigger.SendCommand("deleteTrigger", { index = index, id = t and t.id })
 end
 
--- UI shortcut: reset trigger count at index
+-- UI 快捷方式：重置指定索引触发器的触发计数
 function EventTrigger.ResetTrigger(index)
     local t = EventTrigger.triggers[index]
     EventTrigger.SendCommand("resetTrigger", { index = index, id = t and t.id })
 end
 
--- UI shortcut: delete all triggers (all=true all, otherwise only own)
+-- UI 快捷方式：删除全部触发器（all=true 删全部，否则仅删自己的）
 function EventTrigger.DeleteAllTriggers(all)
     EventTrigger.SendCommand("deleteAllTriggers", { all = all })
 end
 
--- UI shortcut: toggle a trigger enabled/disabled
+-- UI 快捷方式：切换触发器的启用/禁用状态
 function EventTrigger.ToggleTrigger(index)
     local t = EventTrigger.triggers[index]
     EventTrigger.SendCommand("toggleTrigger", {
@@ -2243,14 +2242,14 @@ function EventTrigger.ToggleTrigger(index)
     })
 end
 
--- UI shortcut: disable all triggers + delivery points
+-- UI 快捷方式：禁用全部触发器 + 交付点
 function EventTrigger.DisableAll()
     EventTrigger.SendCommand("disableAll", { all = true })
 end
 
 -- ============================================================
--- Edit wizard (ISTextBox multi-step input)
--- Step 1: Edit message text
+-- 编辑向导（ISTextBox 多步输入）
+-- 第 1 步：编辑消息文本
 -- ============================================================
 function EventTrigger.PromptEditMessage(index)
     EventTrigger._editIndex = index
@@ -2272,7 +2271,7 @@ function EventTrigger.PromptEditMessage(index)
     modal:addToUIManager()
 end
 
--- Step 2: Edit delay
+-- 第 2 步：编辑延迟
 function EventTrigger.PromptEditDelay()
     local idx = EventTrigger._editIndex
     local t = EventTrigger.triggers[idx]
@@ -2292,7 +2291,7 @@ function EventTrigger.PromptEditDelay()
     modal:addToUIManager()
 end
 
--- Step 3: Edit range
+-- 第 3 步：编辑范围
 function EventTrigger.PromptEditRange()
     local idx = EventTrigger._editIndex
     local t = EventTrigger.triggers[idx]
@@ -2312,7 +2311,7 @@ function EventTrigger.PromptEditRange()
     modal:addToUIManager()
 end
 
--- Step 4: Edit max triggers
+-- 第 4 步：编辑最大触发次数
 function EventTrigger.PromptEditMaxTriggers()
     local idx = EventTrigger._editIndex
     local t = EventTrigger.triggers[idx]
@@ -2333,7 +2332,7 @@ function EventTrigger.PromptEditMaxTriggers()
     modal:addToUIManager()
 end
 
--- Step 5: Edit output mode (button-based)
+-- 第 5 步：编辑输出模式（基于按钮）
 function EventTrigger.PromptEditOutput()
     local idx = EventTrigger._editIndex
     local t = EventTrigger.triggers[idx]
@@ -2358,7 +2357,7 @@ function EventTrigger.PromptEditOutput()
     modal:addToUIManager()
 end
 
--- Step 5b (Named mode only)
+-- 第 5b 步（仅具名模式）
 function EventTrigger.PromptEditOutputName()
     local idx = EventTrigger._editIndex
     local t = EventTrigger.triggers[idx]
@@ -2384,7 +2383,7 @@ function EventTrigger.PromptEditOutputName()
     modal:addToUIManager()
 end
 
--- Step 6: Edit cooldown
+-- 第 6 步：编辑冷却
 function EventTrigger.PromptEditCooldown()
     local idx = EventTrigger._editIndex
     local t = EventTrigger.triggers[idx]
@@ -2407,7 +2406,7 @@ function EventTrigger.PromptEditCooldown()
     modal:addToUIManager()
 end
 
--- Open trigger history window
+-- 打开触发器历史窗口
 function EventTrigger.ShowHistory(index)
     if EventTrigger._hist then
         EventTrigger._hist:close()
@@ -2418,13 +2417,13 @@ function EventTrigger.ShowHistory(index)
 end
 
 -- ============================================================
--- UI layout system: supports XML loading (media/ui/EventTriggerLayout.xml),
--- falls back to hardcoded layout on failure
+-- UI 布局系统：支持 XML 加载（media/ui/EventTriggerLayout.xml），
+-- 加载失败时回退到硬编码布局
 -- ============================================================
 
 local LAYOUT = nil
 
--- Default hardcoded layout (XML fallback)
+-- 默认硬编码布局（XML 回退）
 local function DefaultLayout()
     return {
         window = { x = 0, y = 0, w = 1020, h = 560 },
@@ -2458,8 +2457,8 @@ local function DefaultLayout()
     }
 end
 
--- Load layout: DefaultLayout() is the single source of truth.
--- (XML parsing removed so the layout file can never drift out of sync with code.)
+-- 加载布局：DefaultLayout() 是唯一事实来源。
+-- （XML 解析已移除，避免布局文件与代码不同步。）
 local function LoadLayout()
     if LAYOUT then return LAYOUT end
     LAYOUT = DefaultLayout()
@@ -2467,8 +2466,8 @@ local function LoadLayout()
 end
 
 -- ============================================================
--- EventTriggerUI — main manager panel (ISPanel-derived)
--- Shows trigger list with pagination, creator filtering, edit/delete/reset/history actions
+-- EventTriggerUI — 主管理面板（派生自 ISPanel）
+-- 展示触发器列表，支持分页、创建者筛选、编辑/删除/重置/历史操作
 -- ============================================================
 EventTriggerUI = ISPanel:derive("EventTriggerUI")
 
@@ -2493,7 +2492,7 @@ function EventTriggerUI:create()
     self.altColors = { {0.15,0.15,0.15}, {0.11,0.11,0.11} }
     self.pageNum = 0
 
-    -- Adaptive layout (all dimensions scale with self.width/height + US)
+    -- 自适应布局（所有尺寸随 self.width/height 与 US 缩放）
     local titleH = 28
     self.headerY = titleH + 6
     self.listX = math.floor(10 * s)
@@ -2505,14 +2504,14 @@ function EventTriggerUI:create()
     self.listH = self.footerY - self.listY - 10
     self.cols = self:computeCols()
 
-    -- Close button
+    -- 关闭按钮
     self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerUI.onClose)
     self.closeBtn:initialise()
     self:addChild(self.closeBtn)
 
     self:refreshList()
 
-    -- Footer buttons — flow layout using each button's TRUE (auto-expanded) width
+    -- 底部按钮 — 使用每个按钮真实（自动扩展后）的宽度进行流式布局
     local gap = math.floor(10 * s)
     local fx = self.listX
     local function placeBtn(title, onclick)
@@ -2535,7 +2534,7 @@ function EventTriggerUI:create()
     self.showAllBtn = placeBtn(getText("UI_ET_Btn_ShowAll"), EventTriggerUI.onToggleView)
     self.showAllBtn:setVisible(EventTrigger.IsMultiplayer() and EventTrigger.IsAdmin())
 
-    -- Pagination buttons (right-aligned in footer, clear of action buttons)
+    -- 分页按钮（底部右对齐，远离操作按钮）
     local pgX = self.width - 10 - 24 - 4 - 24
     self.prevPageBtn = ISButton:new(pgX, self.footerY, 24, btnH, "<", self, EventTriggerUI.onPrevPage)
     self.prevPageBtn:initialise()
@@ -2548,7 +2547,7 @@ function EventTriggerUI:create()
     self:updatePageButtons()
 end
 
--- Column layout: proportional widths so headers/rows always align at any window size.
+-- 列布局：按比例分配宽度，确保任意窗口尺寸下标题与行都对齐。
 function EventTriggerUI:computeCols()
     local ratios = { 0.04, 0.15, 0.24, 0.20, 0.10, 0.08, 0.19 }
     local cols = {}
@@ -2561,19 +2560,19 @@ function EventTriggerUI:computeCols()
     return cols
 end
 
--- Get filtered triggers by creator
--- SP: show all; MP: show all or own based on viewAll flag
+-- 按创建者筛选触发器
+-- 单机：显示全部；联机：根据 viewAll 标记决定显示全部或仅自己的
 function EventTriggerUI:getFilteredTriggers()
     local all = EventTrigger.triggers
     local allDlv = EventTrigger.deliveryPoints or {}
 
     local function buildList()
         local list = {}
-        -- Add regular triggers
+        -- 添加普通触发器
         for i, t in ipairs(all) do
             table.insert(list, { trigger = t, index = i })
         end
-        -- Add delivery points (offset index for display, starting after triggers)
+        -- 添加交付点（显示用索引在触发器之后偏移）
         for i, dp in ipairs(allDlv) do
             if dp and dp.type == "delivery" then
                 table.insert(list, { trigger = dp, index = #all + i, _isDelivery = true, _dlvIndex = i })
@@ -2582,12 +2581,12 @@ function EventTriggerUI:getFilteredTriggers()
         return list
     end
 
-    -- SP always shows all
+    -- 单机始终显示全部
     if not EventTrigger.IsMultiplayer() then
         return buildList()
     end
 
-    -- MP: show all or filter by creator
+    -- 联机：显示全部或按创建者筛选
     if self.viewAll then
         return buildList()
     end
@@ -2607,18 +2606,18 @@ function EventTriggerUI:getFilteredTriggers()
     return filtered
 end
 
--- Calculate rows per page
+-- 计算每页行数
 function EventTriggerUI:rowsPerPage()
     return math.max(1, math.floor(self.listH / self.rowH))
 end
 
--- Calculate total pages
+-- 计算总页数
 function EventTriggerUI:totalPages()
     local list = self:getFilteredTriggers()
     return math.max(1, math.ceil(#list / self:rowsPerPage()))
 end
 
--- Update pagination button visibility and enabled state
+-- 更新分页按钮的可见性和启用状态
 function EventTriggerUI:updatePageButtons()
     if not self.prevPageBtn or not self.nextPageBtn then return end
     local list = self:getFilteredTriggers()
@@ -2632,7 +2631,7 @@ function EventTriggerUI:updatePageButtons()
     self.nextPageBtn:setEnable(self.pageNum < tp - 1)
 end
 
--- Clear all row controls from list
+-- 清除列表中的全部行控件
 function EventTriggerUI:clearList()
     for _, child in ipairs(self.rows) do
         child:removeFromUIManager()
@@ -2643,7 +2642,7 @@ function EventTriggerUI:clearList()
     self.rowCount = 0
 end
 
--- Refresh list content (clear then rebuild rows for current page)
+-- 刷新列表内容（清空后重建当前页的行）
 function EventTriggerUI:refreshList()
     self:clearList()
 
@@ -2665,7 +2664,7 @@ function EventTriggerUI:refreshList()
     self:updatePageButtons()
 end
 
--- Add a trigger/delivery data row to list (text labels + action buttons)
+-- 向列表添加一个触发器/交付点数据行（文本标签 + 操作按钮）
 function EventTriggerUI:addRow(entry)
     local t = entry.trigger
     local index = entry.index
@@ -2683,11 +2682,11 @@ function EventTriggerUI:addRow(entry)
     local colTrig  = cols[6]
     local colActs  = cols[7]
 
-    -- Row background color: delivery points get a distinct tint
+    -- 行背景色：交付点使用独特的色调区分
     local bgColor = isDlv and {0.08, 0.06, 0.12} or {0.08, 0.08, 0.08}
 
     if isDlv then
-        -- Delivery point row
+        -- 交付点行
         local count = t.triggerCount or 0
         local completed = count > 0
         local reqCount = t.requiredItems and #t.requiredItems or 0
@@ -2713,7 +2712,7 @@ function EventTriggerUI:addRow(entry)
             x = colTrig.x + 4, w = colTrig.w, text = EventTrigger.fitText(cntStr, F, colTrig.w - 12), color = cntColor,
         }
     else
-        -- Regular trigger row
+        -- 普通触发器行
         local exhausted = t.maxTriggers > 0 and (t.triggerCount or 0) >= t.maxTriggers
 
         local F = UIFont.Small
@@ -2745,7 +2744,7 @@ function EventTriggerUI:addRow(entry)
         }
     end
 
-    -- Action buttons — flow layout using each button's TRUE (auto-expanded) width
+    -- 操作按钮 — 使用每个按钮真实（自动扩展后）的宽度进行流式布局
     local s = EventTrigger.US
     local btnH = math.floor(22 * s)
     local gap = math.floor(6 * s)
@@ -2771,7 +2770,7 @@ function EventTriggerUI:addRow(entry)
     addActionBtn(getText("UI_ET_Btn_Hist"), EventTriggerUI.onHistoryRow)
 end
 
--- Title bar drag: start drag when clicking title area
+-- 标题栏拖动：点击标题区域时开始拖动
 function EventTriggerUI:onMouseDown(x, y)
     local titleH = 28
     if y >= 0 and y < titleH then
@@ -2784,7 +2783,7 @@ function EventTriggerUI:onMouseDown(x, y)
     return ISPanel.onMouseDown(self, x, y)
 end
 
--- Drag move window
+-- 拖动移动窗口
 function EventTriggerUI:onMouseMove(x, y)
     if self.dragging then
         self:setX(getMouseX() - self.dragOfsX)
@@ -2793,7 +2792,7 @@ function EventTriggerUI:onMouseMove(x, y)
     end
 end
 
--- End drag
+-- 结束拖动
 function EventTriggerUI:onMouseUp(x, y)
     if self.dragging then
         self.dragging = false
@@ -2802,10 +2801,10 @@ function EventTriggerUI:onMouseUp(x, y)
     end
 end
 
--- Button callback: edit row trigger
+-- 按钮回调：编辑行触发器
 function EventTriggerUI:onEditRow(btn)
     if btn.entry and btn.entry._isDelivery then
-        -- Edit delivery point: re-open setup wizard at its position
+        -- 编辑交付点：在其坐标处重新打开设置向导
         local dp = btn.entry.trigger
         local dlvIdx = btn.entry._dlvIndex
         if dp and dlvIdx then
@@ -2818,7 +2817,7 @@ function EventTriggerUI:onEditRow(btn)
     EventTrigger.PromptEditMessage(idx)
 end
 
--- Button callback: delete row trigger/delivery
+-- 按钮回调：删除行触发器/交付点
 function EventTriggerUI:onDeleteRow(btn)
     if btn.entry and btn.entry._isDelivery then
         local dp = btn.entry.trigger
@@ -2831,7 +2830,7 @@ function EventTriggerUI:onDeleteRow(btn)
     EventTrigger.DeleteTrigger(btn.idx)
 end
 
--- Button callback: reset row trigger count / delivery completion
+-- 按钮回调：重置行触发器的触发计数 / 交付点的完成状态
 function EventTriggerUI:onResetRow(btn)
     if btn.entry and btn.entry._isDelivery then
         local dp = btn.entry.trigger
@@ -2844,7 +2843,7 @@ function EventTriggerUI:onResetRow(btn)
     EventTrigger.ResetTrigger(btn.idx)
 end
 
--- Button callback: toggle row trigger/delivery enabled state
+-- 按钮回调：切换行触发器/交付点的启用状态
 function EventTriggerUI:onToggleRow(btn)
     if btn.entry and btn.entry._isDelivery then
         local dp = btn.entry.trigger
@@ -2857,7 +2856,7 @@ function EventTriggerUI:onToggleRow(btn)
     EventTrigger.ToggleTrigger(btn.idx)
 end
 
--- Button callback: view row trigger history / delivery details
+-- 按钮回调：查看行触发器历史 / 交付点详情
 function EventTriggerUI:onHistoryRow(btn)
     if btn.entry and btn.entry._isDelivery then
         local dp = btn.entry.trigger
@@ -2869,7 +2868,7 @@ function EventTriggerUI:onHistoryRow(btn)
     EventTrigger.ShowHistory(btn.idx)
 end
 
--- Button callback: add new trigger at current position (start wizard)
+-- 按钮回调：在当前位置添加新触发器（启动向导）
 function EventTriggerUI:onAdd()
     local player = getPlayer()
     if not player then
@@ -2881,8 +2880,8 @@ function EventTriggerUI:onAdd()
     EventTrigger.PromptDelayRange(math.floor(x), math.floor(y), math.floor(z))
 end
 
--- Button callback: delete all triggers (admin+viewAll = all, otherwise own only)
--- Requires typing YES (uppercase) to confirm the destructive action.
+-- 按钮回调：删除全部触发器（admin+viewAll = 全部，否则仅自己的）
+-- 需要输入 YES（大写）以确认此破坏性操作。
 function EventTriggerUI:onDeleteAll()
     local modal = EventTriggerTextPrompt:new(
         getText("UI_ET_Btn_DeleteAll"),
@@ -2897,12 +2896,12 @@ function EventTriggerUI:onDeleteAll()
     modal:addToUIManager()
 end
 
--- Button callback: disable all triggers + delivery points
+-- 按钮回调：禁用全部触发器 + 交付点
 function EventTriggerUI:onDisableAll()
     EventTrigger.DisableAll()
 end
 
--- Button callback: manual refresh list
+-- 按钮回调：手动刷新列表
 function EventTriggerUI:onRefresh()
     if EventTrigger.IsMultiplayer() then
         EventTrigger.RequestSync()
@@ -2912,7 +2911,7 @@ function EventTriggerUI:onRefresh()
     self:refreshList()
 end
 
--- Button callback: toggle "Show All"/"Show Mine" view
+-- 按钮回调：切换"显示全部"/"显示我的"视图
 function EventTriggerUI:onToggleView()
     self.viewAll = not self.viewAll
     self.showAllBtn:setTitle(self.viewAll and getText("UI_ET_Btn_ShowMine") or getText("UI_ET_Btn_ShowAll"))
@@ -2923,7 +2922,7 @@ function EventTriggerUI:onToggleView()
     self:refreshList()
 end
 
--- Button callback: previous page
+-- 按钮回调：上一页
 function EventTriggerUI:onPrevPage()
     if self.pageNum > 0 then
         self.pageNum = self.pageNum - 1
@@ -2931,7 +2930,7 @@ function EventTriggerUI:onPrevPage()
     end
 end
 
--- Button callback: next page
+-- 按钮回调：下一页
 function EventTriggerUI:onNextPage()
     if self.pageNum < self:totalPages() - 1 then
         self.pageNum = self.pageNum + 1
@@ -2939,19 +2938,19 @@ function EventTriggerUI:onNextPage()
     end
 end
 
--- Close window callback
+-- 关闭窗口回调
 function EventTriggerUI:onClose()
     self:close()
 end
 
--- Close window and remove from UIManager
+-- 关闭窗口并从 UIManager 移除
 function EventTriggerUI:close()
     if EventTrigger._ui == self then EventTrigger._ui = nil end
     self:setVisible(false)
     self:removeFromUIManager()
 end
 
--- Per-frame UI draw (border, title, header, background, row data, pagination, mode indicator)
+-- 每帧 UI 绘制（边框、标题、表头、背景、行数据、分页、模式指示）
 function EventTriggerUI:prerender()
     ISPanel.prerender(self)
 
@@ -2971,7 +2970,7 @@ function EventTriggerUI:prerender()
 
     self:drawTextCentre(getText("UI_ET_Mgr_Title"), self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
 
-    -- Header divider
+    -- 表头分隔线
     local divY = self.listY - 4
     self:drawRect(self.listX, divY, self.listW, 1, 0.7, 0.4, 0.4, 0.4)
 
@@ -3005,24 +3004,24 @@ function EventTriggerUI:prerender()
         end
     end
 
-    -- Empty list hint
+    -- 空列表提示
     if total == 0 then
         local txt = getText("UI_ET_EmptyList")
         self:drawTextCentre(txt, self.width / 2, self.listY + 20, 0.45, 0.45, 0.45, 1, UIFont.Small)
     end
 
-    -- Pagination indicator (above the pagination buttons in footer)
+    -- 分页指示（位于底部按钮上方）
     if total > rpp then
         local pgText = getText("UI_ET_Page", self.pageNum + 1, tp)
         self:drawText(pgText, self.width - 130, self.footerY + 8, 0.6, 0.6, 0.6, 1, UIFont.Small)
     end
 
-    -- Mode indicator in title bar (left side, clear of close button)
+    -- 标题栏模式指示（左侧，避开关闭按钮）
     local modeText = EventTrigger.IsMultiplayer() and getText("UI_ET_Mode_Server") or getText("UI_ET_Mode_Local")
     self:drawText(modeText, 12, 8, 0.5, 0.5, 0.5, 1, UIFont.Small)
 end
 
--- EventTriggerUI constructor: create centered main management panel
+-- EventTriggerUI 构造函数：创建居中的主管理面板
 function EventTriggerUI:new()
     local w = EventTrigger.fitW(1020)
     local h = EventTrigger.fitH(560)
@@ -3042,8 +3041,8 @@ function EventTriggerUI:new()
 end
 
 -- ============================================================
--- EventTriggerHistoryUI — trigger history viewer (ISPanel-derived)
--- Shows trigger info and all trigger records (who triggered it and when)
+-- EventTriggerHistoryUI — 触发器历史查看器（派生自 ISPanel）
+-- 展示触发器信息与全部触发记录（谁在何时触发）
 -- ============================================================
 EventTriggerHistoryUI = ISPanel:derive("EventTriggerHistoryUI")
 
@@ -3052,7 +3051,7 @@ function EventTriggerHistoryUI:initialise()
     self:create()
 end
 
--- Build history UI: trigger summary + trigger record list
+-- 构建历史 UI：触发器摘要 + 触发记录列表
 function EventTriggerHistoryUI:create()
     self:setAlwaysOnTop(true)
 
@@ -3061,19 +3060,19 @@ function EventTriggerHistoryUI:create()
     local F = UIFont.Small
     local maxW = self.width - 28
 
-    -- Close button
+    -- 关闭按钮
     self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerHistoryUI.onClose)
     self.closeBtn:initialise()
     self:addChild(self.closeBtn)
 
-    -- Find trigger, show error if not found
+    -- 查找触发器，若不存在则显示错误
     local t = EventTrigger.triggers[self.triggerIndex]
     if not t then
         self.lines[#self.lines + 1] = { x = 14, y = y, text = getText("UI_ET_Hist_TriggerNotFound"), color = {1,0.5,0.5} }
         return
     end
 
-    -- Trigger info — split into separate lines so long messages never overlap
+    -- 触发器信息 — 拆分为多行，避免长消息重叠
     self.lines[#self.lines + 1] = { x = 14, y = y, text = EventTrigger.fitText(getText("UI_ET_Hist_Position", t.x, t.y, t.z), F, maxW), color = {0.5,0.8,1} }
     y = y + 24
     self.lines[#self.lines + 1] = { x = 14, y = y, text = getText("UI_ET_Hist_Message", EventTrigger.fitText(t.message or "", F, maxW - 90)), color = {1,1,1} }
@@ -3081,7 +3080,7 @@ function EventTriggerHistoryUI:create()
     self.lines[#self.lines + 1] = { x = 14, y = y, text = getText("UI_ET_Hist_Creator", EventTrigger.fitText(t.creator or "?", F, maxW - 90)), color = {0.8,0.8,0.5} }
     y = y + 28
 
-    -- Trigger history list
+    -- 触发历史列表
     local triggeredBy = t.triggeredBy or {}
     self.lines[#self.lines + 1] = { x = 14, y = y, text = getText("UI_ET_Hist_TotalTriggers", #triggeredBy), color = {1,1,1} }
     y = y + 24
@@ -3089,7 +3088,7 @@ function EventTriggerHistoryUI:create()
     if #triggeredBy == 0 then
         self.lines[#self.lines + 1] = { x = 14, y = y, text = getText("UI_ET_Hist_NoTriggers"), color = {0.5,0.5,0.5} }
     else
-        -- Display each trigger history entry
+        -- 显示每条触发历史记录
         for i, entry in ipairs(triggeredBy) do
             local pId, tStr
             if type(entry) == "table" then
@@ -3110,19 +3109,19 @@ function EventTriggerHistoryUI:create()
     end
 end
 
--- Close history window
+-- 关闭历史窗口
 function EventTriggerHistoryUI:onClose()
     self:close()
 end
 
--- Remove from UIManager
+-- 从 UIManager 移除
 function EventTriggerHistoryUI:close()
     if EventTrigger._hist == self then EventTrigger._hist = nil end
     self:setVisible(false)
     self:removeFromUIManager()
 end
 
--- Title bar drag
+-- 标题栏拖动
 function EventTriggerHistoryUI:onMouseDown(x, y)
     if y >= 0 and y < 28 then
         self.dragging = true
@@ -3134,7 +3133,7 @@ function EventTriggerHistoryUI:onMouseDown(x, y)
     return ISPanel.onMouseDown(self, x, y)
 end
 
--- Drag move
+-- 拖动移动
 function EventTriggerHistoryUI:onMouseMove(x, y)
     if self.dragging then
         self:setX(getMouseX() - self.dragOfsX)
@@ -3143,7 +3142,7 @@ function EventTriggerHistoryUI:onMouseMove(x, y)
     end
 end
 
--- End drag
+-- 结束拖动
 function EventTriggerHistoryUI:onMouseUp(x, y)
     if self.dragging then
         self.dragging = false
@@ -3152,7 +3151,7 @@ function EventTriggerHistoryUI:onMouseUp(x, y)
     end
 end
 
--- Per-frame history window draw (border, title bar, trigger record text)
+-- 每帧历史窗口绘制（边框、标题栏、触发记录文本）
 function EventTriggerHistoryUI:prerender()
     ISPanel.prerender(self)
     self:drawRectBorder(0, 0, self.width, self.height, 0.8, 0.4, 0.4, 0.4)
@@ -3166,7 +3165,7 @@ function EventTriggerHistoryUI:prerender()
     end
 end
 
--- EventTriggerHistoryUI constructor
+-- EventTriggerHistoryUI 构造函数
 function EventTriggerHistoryUI:new(index)
     local w = EventTrigger.fitW(560)
     local h = EventTrigger.fitH(460)
@@ -3187,7 +3186,7 @@ function EventTriggerHistoryUI:new(index)
 end
 
 -- ============================================================
--- EventTriggerUI delivery integration (delegated to EventTriggerDelivery)
+-- EventTriggerUI 交付集成（委派给 EventTriggerDelivery）
 -- ============================================================
 function EventTriggerUI:onAddDelivery()
     if not EventTrigger.DeliveryLoaded then
@@ -3201,15 +3200,15 @@ function EventTriggerUI:onAddDelivery()
 end
 
 -- ============================================================
--- Event registration: bind core functions to PZ game events
--- Load order: OnGameStart → OnTick (per-frame) → context menu → server commands
+-- 事件注册：将核心函数绑定到 PZ 游戏事件
+-- 加载顺序：OnGameStart → OnTick（每帧）→ 右键菜单 → 服务器指令
 -- ============================================================
 Events.OnTick.Add(EventTrigger.OnTick)
 Events.OnFillWorldObjectContextMenu.Add(EventTrigger.OnFillWorldObjectContextMenu)
 Events.OnServerCommand.Add(EventTrigger.OnServerCommand)
 
--- First tick auto-request sync (BulletinBoard pattern, no OnGameStart)
--- Fires on server join and reconnect
+-- 首帧自动请求同步（BulletinBoard 模式，无 OnGameStart）
+-- 在加入服务器和重连时触发
 local _etFirstTickDone = false
 local function onFirstTick()
     if _etFirstTickDone then return end

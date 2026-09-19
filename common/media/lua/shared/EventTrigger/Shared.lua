@@ -1,5 +1,5 @@
 -- ============================================================
--- EventTrigger/Shared.lua — constants, commands, data structures
+-- EventTrigger/Shared.lua — 常量、指令、数据结构
 -- ============================================================
 
 local EventTriggerShared = {}
@@ -14,27 +14,27 @@ EventTriggerShared.DELIVERY_DIR = EventTriggerShared.DATA_DIR .. "/delivery"
 EventTriggerShared.INDEX_FILE = EventTriggerShared.DATA_DIR .. "/index.json"
 EventTriggerShared.DELIVERY_INDEX_FILE = EventTriggerShared.DELIVERY_DIR .. "/index.json"
 
--- Maximum trigger limit (prevent unbounded growth)
+-- 触发器数量上限（防止无限增长）
 EventTriggerShared.MAX_TRIGGERS = 200
 
--- Maximum delivery points
+-- 交付点数量上限
 EventTriggerShared.MAX_DELIVERY_POINTS = 100
 
--- Maximum history entries retained per trigger
+-- 每个触发器保留的历史记录条数上限
 EventTriggerShared.MAX_HISTORY_PER_TRIGGER = 50
 
 -- ============================================================
--- Command protocol (client <-> server)
+-- 指令协议（客户端 <-> 服务器）
 -- ============================================================
 EventTriggerShared.COMMANDS = {
-    -- Client request sync (on login / manual refresh)
+    -- 客户端请求同步（登录时 / 手动刷新）
     REQUEST_SYNC      = "requestSync",
-    -- Server pushes all triggers to a single client
+    -- 服务器向单个客户端推送全部触发器
     SYNC_STATE        = "syncAll",
-    -- Server broadcasts all triggers to all clients (after CRUD)
+    -- 服务器向所有客户端广播全部触发器（CRUD 之后）
     BROADCAST_ALL     = "broadcastAll",
 
-    -- CRUD operations (client -> server)
+    -- CRUD 操作（客户端 -> 服务器）
     PLACE_TRIGGER     = "placeTrigger",
     DELETE_TRIGGER    = "deleteTrigger",
     RESET_TRIGGER     = "resetTrigger",
@@ -45,15 +45,15 @@ EventTriggerShared.COMMANDS = {
     TOGGLE_TRIGGER    = "toggleTrigger",
     DISABLE_ALL       = "disableAll",
 
-    -- Trigger recording (client -> server)
+    -- 触发记录（客户端 -> 服务器）
     RECORD_TRIGGER    = "recordTrigger",
 
-    -- Notifications (server -> client)
+    -- 通知（服务器 -> 客户端）
     NAMED_MESSAGE     = "namedMessage",
     NOTIFY            = "notify",
 
-    -- ==================== Delivery Point Commands ====================
-    -- CRUD (client -> server)
+    -- ==================== 交付点指令 ====================
+    -- CRUD（客户端 -> 服务器）
     PLACE_DELIVERY    = "placeDeliveryPoint",
     DELETE_DELIVERY   = "deleteDeliveryPoint",
     DELETE_ALL_DELIVERY = "deleteAllDeliveryPoints",
@@ -61,29 +61,29 @@ EventTriggerShared.COMMANDS = {
     RESET_DELIVERY    = "resetDelivery",
     TOGGLE_DELIVERY   = "toggleDelivery",
 
-    -- Delivery transaction (client -> server)
+    -- 交付交易（客户端 -> 服务器）
     REQUEST_DELIVERY  = "requestDelivery",
     CONFIRM_DELIVERY  = "confirmDelivery",
 
-    -- Delivery notifications (server -> client)
+    -- 交付通知（服务器 -> 客户端）
     DELIVERY_RESULT   = "deliveryResult",
 }
 
 -- ============================================================
--- Trigger output type enum
+-- 触发器输出类型枚举
 -- ============================================================
 EventTriggerShared.OutputType = {
-    NAMED = 1,  -- Named + system channel
-    SAY   = 2,  -- /say + bubble
-    DO    = 3,  -- /do environment narration
-    LOW   = 4,  -- /low + bubble
-    YELL  = 5,  -- /yell + bubble
-    OOC   = 6,  -- /ooc global OOC
-    HALO  = 7,  -- Floating text above head
+    NAMED = 1,  -- 具名 + 系统频道
+    SAY   = 2,  -- /say + 气泡
+    DO    = 3,  -- /do 环境旁白
+    LOW   = 4,  -- /low + 气泡
+    YELL  = 5,  -- /yell + 气泡
+    OOC   = 6,  -- /ooc 全局 OOC
+    HALO  = 7,  -- 头顶漂浮文字
 }
 
 -- ============================================================
--- ID generation (server-side unique)
+-- ID 生成（服务器端唯一）
 -- ============================================================
 EventTriggerShared.generateId = function()
     local rand = ZombRand(100000, 999999)
@@ -91,11 +91,11 @@ EventTriggerShared.generateId = function()
 end
 
 -- ============================================================
--- Cooldown (wall clock vs game clock) data + helpers
+-- 冷却（真实时钟 vs 游戏时钟）数据 + 辅助函数
 -- ============================================================
-EventTriggerShared.COOLDOWN_NONE = 0  -- no cooldown
-EventTriggerShared.COOLDOWN_WALL = 1  -- real / wall clock (os.time seconds)
-EventTriggerShared.COOLDOWN_GAME = 2  -- in-game clock (world age seconds)
+EventTriggerShared.COOLDOWN_NONE = 0  -- 无冷却
+EventTriggerShared.COOLDOWN_WALL = 1  -- 真实/墙上时钟（os.time 秒）
+EventTriggerShared.COOLDOWN_GAME = 2  -- 游戏内时钟（世界年龄秒）
 
 local function _clampInt(v)
     v = tonumber(v)
@@ -105,8 +105,8 @@ local function _clampInt(v)
     return v
 end
 
--- Build a cooldown table from args (nested `cooldown` table or flat fields),
--- plus legacy cooldownType/cooldownValue migration for delivery points.
+-- 从参数构建冷却表（支持嵌套 cooldown 表或平铺字段），
+-- 并包含交付点的旧版 cooldownType/cooldownValue 迁移。
 EventTriggerShared.makeCooldown = function(args)
     args = args or {}
     local src
@@ -123,7 +123,7 @@ EventTriggerShared.makeCooldown = function(args)
     local hours   = _clampInt(src.hours or src.cooldownHours)
     local minutes = _clampInt(src.minutes or src.cooldownMinutes)
 
-    -- Legacy delivery fields: cooldownType (0=none,1=game,2=real) + cooldownValue (minutes)
+    -- 兼容旧版交付字段：cooldownType（0=无,1=游戏,2=真实）+ cooldownValue（分钟）
     local legacyType = tonumber(src.cooldownType) or 0
     local legacyValue = tonumber(src.cooldownValue) or 0
     if legacyValue > 0 and years == 0 and months == 0 and days == 0 and hours == 0 and minutes == 0 then
@@ -150,7 +150,7 @@ EventTriggerShared.makeCooldown = function(args)
     }
 end
 
--- True when there is no cooldown (mode NONE, or every duration field is 0).
+-- 无冷却时返回 true（模式为 NONE，或所有时长字段均为 0）。
 EventTriggerShared.isCooldownZero = function(cd)
     cd = cd or {}
     if cd.mode == EventTriggerShared.COOLDOWN_NONE then return true end
@@ -158,7 +158,7 @@ EventTriggerShared.isCooldownZero = function(cd)
         and (cd.hours or 0) == 0 and (cd.minutes or 0) == 0
 end
 
--- Total cooldown length in seconds (uniform unit for both modes).
+-- 冷却总时长（秒），两种模式统一单位。
 EventTriggerShared.cooldownDurationSeconds = function(cd)
     cd = cd or {}
     local y = cd.years or 0
@@ -169,8 +169,8 @@ EventTriggerShared.cooldownDurationSeconds = function(cd)
     return (((y * 365 + mo * 30 + d) * 24 + h) * 60 + mi) * 60
 end
 
--- Current clock value in seconds for the given mode.
--- wall clock -> os.time() seconds; game clock -> world age in seconds.
+-- 给定模式下的当前时钟秒值。
+-- 墙上时钟 -> os.time() 秒；游戏时钟 -> 世界年龄秒。
 EventTriggerShared.cooldownNowSeconds = function(mode)
     if mode == EventTriggerShared.COOLDOWN_GAME then
         return getGameTime():getWorldAgeHours() * 3600
@@ -178,7 +178,7 @@ EventTriggerShared.cooldownNowSeconds = function(mode)
     return os.time()
 end
 
--- Human-readable cooldown string (for logs / UI display).
+-- 人类可读的冷却字符串（用于日志 / UI 显示）。
 EventTriggerShared.formatCooldown = function(cd)
     cd = cd or {}
     if EventTriggerShared.isCooldownZero(cd) then return "None" end
@@ -193,7 +193,7 @@ EventTriggerShared.formatCooldown = function(cd)
 end
 
 -- ============================================================
--- Build complete trigger object (factory function, ensure fields complete)
+-- 构建完整触发器对象（工厂函数，确保字段完整）
 -- ============================================================
 EventTriggerShared.makeTrigger = function(args)
     return {
@@ -217,7 +217,7 @@ EventTriggerShared.makeTrigger = function(args)
 end
 
 -- ============================================================
--- Build trigger history entry
+-- 构建触发器历史记录条目
 -- ============================================================
 EventTriggerShared.makeHistoryEntry = function(playerId, timestamp, timeStr)
     return {
@@ -228,7 +228,7 @@ EventTriggerShared.makeHistoryEntry = function(playerId, timestamp, timeStr)
 end
 
 -- ============================================================
--- Build server-stored trigger history file data
+-- 构建服务器端存储的触发器历史文件数据
 -- ============================================================
 EventTriggerShared.makeHistoryData = function(triggerId, entries)
     return {
@@ -239,7 +239,7 @@ EventTriggerShared.makeHistoryData = function(triggerId, entries)
 end
 
 -- ============================================================
--- Build index file data
+-- 构建索引文件数据
 -- ============================================================
 EventTriggerShared.makeIndexData = function(triggerIds)
     return {
@@ -249,10 +249,10 @@ EventTriggerShared.makeIndexData = function(triggerIds)
 end
 
 -- ============================================================
--- Delivery Point data structures
+-- 交付点数据结构
 -- ============================================================
 
--- Build a single delivery item entry
+-- 构建单个交付物品条目
 EventTriggerShared.makeDeliveryItem = function(args)
     return {
         fullType    = tostring(args.fullType or ""),
@@ -262,7 +262,7 @@ EventTriggerShared.makeDeliveryItem = function(args)
     }
 end
 
--- Build a single cost option (one of several selectable consume items, 需求3)
+-- 构建单个消耗选项（需求3：多个可选消耗物品之一）
 EventTriggerShared.makeCostOption = function(args)
     return {
         fullType    = tostring(args.fullType or ""),
@@ -271,18 +271,18 @@ EventTriggerShared.makeCostOption = function(args)
     }
 end
 
--- Build a single exchange branch (same consume, multiple reward branches 需求2;
--- multiple consume options 需求3 via costOptions)
+-- 构建单个兑换分支（需求2：相同消耗，多个奖励分支；
+-- 需求3：通过 costOptions 支持多个消耗选项）
 EventTriggerShared.makeBranch = function(args)
     return {
-        id          = args.id,                 -- 1-based branch index
+        id          = args.id,                 -- 从 1 开始的分支索引
         enabled     = args.enabled ~= false,
         costOptions = args.costOptions or {},  -- 可选消耗物（单选其一）
         rewards     = args.rewards or {},      -- 该分支奖励
     }
 end
 
--- Build complete delivery point object
+-- 构建完整交付点对象
 EventTriggerShared.makeDeliveryPoint = function(args)
     return {
         id            = args.id or EventTriggerShared.generateId(),
@@ -294,13 +294,13 @@ EventTriggerShared.makeDeliveryPoint = function(args)
         range         = math.max(0.5, args.range or 3),
         requiredItems = args.requiredItems or {},
         rewardItems   = args.rewardItems or {},
-        matchMode     = args.matchMode or "all",  -- "all" = AND logic, "any" = OR logic
+        matchMode     = args.matchMode or "all",  -- "all" = AND 逻辑，"any" = OR 逻辑
         branches      = args.branches or {},      -- 多兑换分支（为空则回退旧字段）
         maxPlayers    = math.max(-1, args.maxPlayers or -1),
         maxPerPlayer  = math.max(-1, args.maxPerPlayer or -1),
         cooldown      = EventTriggerShared.makeCooldown(args.cooldown or args),
-        playerDeliveries = args.playerDeliveries or {},  -- playerId -> count
-        playerCooldowns  = args.playerCooldowns or {},   -- playerId -> last delivery timestamp (seconds)
+        playerDeliveries = args.playerDeliveries or {},  -- playerId -> 次数
+        playerCooldowns  = args.playerCooldowns or {},   -- playerId -> 上次交付时间戳（秒）
         triggerCount  = args.triggerCount or 0,
         triggeredBy   = args.triggeredBy or {},
         enabled       = args.enabled ~= false,
@@ -309,7 +309,7 @@ EventTriggerShared.makeDeliveryPoint = function(args)
     }
 end
 
--- Validate a delivery item entry
+-- 校验单个交付物品条目
 EventTriggerShared.validateDeliveryItem = function(item)
     if type(item) ~= "table" then return false end
     if not item.fullType or #item.fullType == 0 then return false end
@@ -317,15 +317,15 @@ EventTriggerShared.validateDeliveryItem = function(item)
     return true
 end
 
--- Resolve effective exchange plan for a delivery point + player selection.
--- Returns costOptions (deduct list) + rewards, honoring branches when present.
--- branchId: selected branch (1-based); costOptionIndex: selected cost option (1-based, 需求3)
--- Resolve effective exchange plan for a delivery point + player selection.
--- Returns qualifyItems (需求物品/资格门槛), costs (消耗扣除), rewards, err.
---   qualifyItems: requiredItems — player MUST satisfy these (per matchMode) to exchange.
---                 collect=true items are both a gate and a cost (legacy); collect=false are check-only gates.
---   costs: items actually deducted (legacy = collect=true requiredItems; branch = selected cost option).
---   rewards: granted items.
+-- 解析交付点的有效兑换方案（结合玩家选择）。
+-- 返回 costOptions（扣除列表）+ rewards，存在分支时优先使用分支。
+-- branchId：选中的分支（从 1 开始）；costOptionIndex：选中的消耗选项（从 1 开始，需求3）
+-- 解析交付点的有效兑换方案（结合玩家选择）。
+-- 返回 qualifyItems（需求物品/资格门槛）、costs（消耗扣除）、rewards、err。
+--   qualifyItems：requiredItems — 玩家必须满足（按 matchMode）才能兑换。
+--                 collect=true 的物品既是门槛又是消耗（旧版）；collect=false 仅作门槛检查。
+--   costs：实际扣除的物品（旧版 = collect=true 的 requiredItems；分支 = 选中的消耗选项）。
+--   rewards：发放的物品。
 EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
     dp = dp or {}
     local branches = dp.branches or {}
@@ -341,7 +341,7 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
         }
     end
 
-    -- Legacy path: no branches → consume = collect=true requiredItems
+    -- 旧版路径：无分支 → 消耗 = collect=true 的 requiredItems
     if #branches == 0 then
         local costs = {}
         for _, req in ipairs(dp.requiredItems or {}) do
@@ -356,7 +356,7 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
         return qualifyItems, costs, dp.rewardItems or {}, nil
     end
 
-    -- Branch path: pick the selected branch (default 1)
+    -- 分支路径：选择指定分支（默认为 1）
     local branch = branches[1]
     if branchId and branches[branchId] and branches[branchId].enabled ~= false then
         branch = branches[branchId]
@@ -365,8 +365,8 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
         return qualifyItems, nil, nil, "Branch unavailable"
     end
 
-    -- Within branch: collect=true requiredItems are consumed ("移除"型需求物品),
-    -- plus the selected cost option (需求3, optional).
+    -- 分支内部：collect=true 的 requiredItems 会被消耗（"移除"型需求物品），
+    -- 再加上选中的消耗选项（需求3，可选）。
     local costs = {}
     for _, req in ipairs(dp.requiredItems or {}) do
         if req.collect ~= false then
@@ -392,7 +392,7 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
     return qualifyItems, costs, branch.rewards or {}, nil
 end
 
--- Build delivery index file data
+-- 构建交付索引文件数据
 EventTriggerShared.makeDeliveryIndexData = function(ids)
     return {
         version = EventTriggerShared.VERSION,

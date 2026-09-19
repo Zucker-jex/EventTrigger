@@ -1,5 +1,5 @@
 -- ============================================================
--- EventTrigger/EventTriggerShared.lua — constants, commands, data structures
+-- EventTrigger/EventTriggerShared.lua — 常量、指令、数据结构
 -- ============================================================
 
 local EventTriggerShared = {}
@@ -12,24 +12,24 @@ EventTriggerShared.HISTORY_DIR = EventTriggerShared.DATA_DIR .. "/history"
 
 EventTriggerShared.INDEX_FILE = EventTriggerShared.DATA_DIR .. "/index.json"
 
--- Maximum trigger limit (prevent unbounded growth)
+-- 触发器数量上限（防止无限增长）
 EventTriggerShared.MAX_TRIGGERS = 200
 
--- Maximum history entries retained per trigger
+-- 每个触发器保留的历史记录条数上限
 EventTriggerShared.MAX_HISTORY_PER_TRIGGER = 50
 
 -- ============================================================
--- Command protocol (client <-> server)
+-- 指令协议（客户端 <-> 服务器）
 -- ============================================================
 EventTriggerShared.COMMANDS = {
-    -- Client request sync (on login / manual refresh)
+    -- 客户端请求同步（登录时 / 手动刷新）
     REQUEST_SYNC      = "requestSync",
-    -- Server pushes all triggers to a single client
+    -- 服务器向单个客户端推送全部触发器
     SYNC_STATE        = "syncAll",
-    -- Server broadcasts all triggers to all clients (after CRUD)
+    -- 服务器向所有客户端广播全部触发器（CRUD 之后）
     BROADCAST_ALL     = "broadcastAll",
 
-    -- CRUD operations (client -> server)
+    -- CRUD 操作（客户端 -> 服务器）
     PLACE_TRIGGER     = "placeTrigger",
     DELETE_TRIGGER    = "deleteTrigger",
     RESET_TRIGGER     = "resetTrigger",
@@ -38,29 +38,29 @@ EventTriggerShared.COMMANDS = {
     EDIT_PARAMS       = "editTriggerParams",
     EDIT_OUTPUT       = "editTriggerOutput",
 
-    -- Trigger recording (client -> server)
+    -- 触发记录（客户端 -> 服务器）
     RECORD_TRIGGER    = "recordTrigger",
 
-    -- Notifications (server -> client)
+    -- 通知（服务器 -> 客户端）
     NAMED_MESSAGE     = "namedMessage",
     NOTIFY            = "notify",
 }
 
 -- ============================================================
--- Trigger output type enum
+-- 触发器输出类型枚举
 -- ============================================================
 EventTriggerShared.OutputType = {
-    NAMED = 1,  -- Named + system channel
-    SAY   = 2,  -- /say + bubble
-    DO    = 3,  -- /do environment narration
-    LOW   = 4,  -- /low + bubble
-    YELL  = 5,  -- /yell + bubble
-    OOC   = 6,  -- /ooc global OOC
-    HALO  = 7,  -- Floating text above head
+    NAMED = 1,  -- 具名 + 系统频道
+    SAY   = 2,  -- /say + 气泡
+    DO    = 3,  -- /do 环境旁白
+    LOW   = 4,  -- /low + 气泡
+    YELL  = 5,  -- /yell + 气泡
+    OOC   = 6,  -- /ooc 全局 OOC
+    HALO  = 7,  -- 头顶漂浮文字
 }
 
 -- ============================================================
--- ID generation (server-side unique)
+-- ID 生成（服务器端唯一）
 -- ============================================================
 EventTriggerShared.generateId = function()
     local rand = ZombRand(100000, 999999)
@@ -68,7 +68,7 @@ EventTriggerShared.generateId = function()
 end
 
 -- ============================================================
--- Build complete trigger object (factory function, ensure fields complete)
+-- 构建完整触发器对象（工厂函数，确保字段完整）
 -- ============================================================
 EventTriggerShared.makeTrigger = function(args)
     return {
@@ -89,7 +89,7 @@ EventTriggerShared.makeTrigger = function(args)
 end
 
 -- ============================================================
--- Build trigger history entry
+-- 构建触发器历史记录条目
 -- ============================================================
 EventTriggerShared.makeHistoryEntry = function(playerId, timestamp, timeStr)
     return {
@@ -100,7 +100,7 @@ EventTriggerShared.makeHistoryEntry = function(playerId, timestamp, timeStr)
 end
 
 -- ============================================================
--- Build server-stored trigger history file data
+-- 构建服务器端存储的触发器历史文件数据
 -- ============================================================
 EventTriggerShared.makeHistoryData = function(triggerId, entries)
     return {
@@ -111,7 +111,7 @@ EventTriggerShared.makeHistoryData = function(triggerId, entries)
 end
 
 -- ============================================================
--- Build index file data
+-- 构建索引文件数据
 -- ============================================================
 EventTriggerShared.makeIndexData = function(triggerIds)
     return {

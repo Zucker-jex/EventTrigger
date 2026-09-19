@@ -1,7 +1,7 @@
 -- ============================================================
--- EventTriggerDelivery.lua — Delivery Point System
--- Inventory item selection UI, dual-match execution, flow UIs
--- Reference: bak\EventTrigger_new UI/interaction design
+-- EventTriggerDelivery.lua — 交付点系统
+-- 背包物品选择 UI、双重匹配执行、流程 UI
+-- 参考：bak\EventTrigger_new UI/interaction design
 -- ============================================================
 
 require "ISUI/ISTextBox"
@@ -15,15 +15,15 @@ local dbg = function(...)
     end
 end
 
--- UTF-8 safe text fitting (defined in EventTriggerClient.lua; fall back to passthrough)
+-- UTF-8 安全文本适配（定义于 EventTriggerClient.lua；缺失时回退为直通）
 local function fitText(text, font, maxWidth)
     if EventTrigger.fitText then return EventTrigger.fitText(text, font, maxWidth) end
     return tostring(text or "")
 end
 
--- Resolve the setup wizard's active item list for a selection mode.
--- "required" = ET qualification items; "cost" = 需求3 consume options;
--- "reward" / "reward_branch" = reward items.
+-- 根据选择模式解析设置向导当前活跃的物品列表。
+-- "required" = ET 资格物品；"cost" = 需求3 消耗选项；
+-- "reward" / "reward_branch" = 奖励物品。
 local function setupItemList(p, mode)
     if not p then return {} end
     if mode == "required" then return p.requiredItems or {} end
@@ -31,9 +31,9 @@ local function setupItemList(p, mode)
     return p.rewardItems or {}
 end
 
--- Unified player identity key (username preferred, fallback to online ID).
--- All delivery state (cooldown, limits, prompts) must use this same key,
--- otherwise cooldown/limit records can silently desync when username is empty.
+-- 统一玩家身份键（优先用户名，回退到在线 ID）。
+-- 所有交付状态（冷却、上限、提示）必须使用同一键，
+-- 否则当用户名为空时冷却/上限记录可能悄悄失同步。
 local function playerKeyOf(player)
     if not player then return "" end
     local u = player:getUsername()
@@ -41,16 +41,16 @@ local function playerKeyOf(player)
     return tostring(player:getOnlineID()) or ""
 end
 
--- Match key for dual matching (FullType + DisplayName). The displayName component
--- distinguishes items that the player renamed via setName(); it is compared exactly
--- on the CLIENT (strict pre-check). The server executes with FullType only (lenient
--- authority, immune to per-player translation differences).
+-- 双重匹配的匹配键（FullType + DisplayName）。DisplayName 分量
+-- 用于区分玩家通过 setName() 重命名的物品；在客户端精确比较
+--（严格预检）。服务器端仅按 FullType 执行（宽松权威，不受
+-- 各玩家翻译差异影响）。
 local function itemKey(fullType, displayName)
     return tostring(fullType or "") .. "|" .. tostring(displayName or "")
 end
 
 -- ============================================================
--- Section 1: Dual Matching Algorithm (FullType + DisplayName)
+-- 第 1 节：双重匹配算法（FullType + DisplayName）
 -- ============================================================
 function EventTrigger.Delivery.MatchItem(item, fullType, displayName)
     if not item then return false end
@@ -58,7 +58,7 @@ function EventTrigger.Delivery.MatchItem(item, fullType, displayName)
 end
 
 -- ============================================================
--- Count matching items in player inventory (FullType + DisplayName)
+-- 统计玩家背包中匹配的物品数量（FullType + DisplayName）
 -- ============================================================
 function EventTrigger.Delivery.CountItems(inventory, requiredItems)
     local counts = {}
@@ -78,11 +78,11 @@ function EventTrigger.Delivery.CountItems(inventory, requiredItems)
 end
 
 -- ============================================================
--- Remove items from inventory (collect first, then remove — safe for MP ArrayList)
--- Only removes items where req.collect ~= false
--- matchMode: "all" = remove all matching items, "any" = remove only selected matching item
--- selectedORIndex: index of selected required item in OR mode (1-based)
--- multiplier: batch count (each item deducted count * multiplier)
+-- 从背包中移除物品（先收集再移除 — 对 MP ArrayList 安全）
+-- 仅移除 req.collect ~= false 的物品
+-- matchMode："all" = 移除所有匹配项，"any" = 仅移除选中的匹配项
+-- selectedORIndex：OR 模式下选中需求项的索引（1-based）
+-- multiplier：批次数（每项扣除 count * multiplier）
 -- ============================================================
 function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, selectedORIndex, multiplier)
     local removedData = {}
@@ -90,11 +90,11 @@ function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, 
     matchMode = matchMode or "all"
     multiplier = multiplier or 1
 
-    -- Phase 1: collect item references (no ArrayList modification during iteration)
+    -- 阶段 1：收集物品引用（迭代期间不修改 ArrayList）
     local toRemoveList = {}
     
     if matchMode == "any" then
-        -- OR mode: only remove from the selected required item
+        -- OR 模式：仅从选中的需求项中移除
         local targetIdx = selectedORIndex or 1
         for idx, req in ipairs(requiredItems) do
             if req.collect ~= false and idx == targetIdx then
@@ -111,7 +111,7 @@ function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, 
             end
         end
     else
-        -- AND mode: collect from all required items
+        -- AND 模式：从所有需求项中收集
         for _, req in ipairs(requiredItems) do
             if req.collect ~= false then
                 local remaining = req.count * multiplier
@@ -127,7 +127,7 @@ function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, 
         end
     end
 
-    -- Phase 2: safe removal (collected references, no iteration conflict)
+    -- 阶段 2：安全移除（已收集引用，无迭代冲突）
     for _, item in ipairs(toRemoveList) do
         table.insert(removedData, {
             fullType = item:getFullType(),
@@ -140,9 +140,9 @@ function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, 
 end
 
 -- ============================================================
--- Grant reward items, return success. On failure, rollback all.
--- Uses inventory:AddItem(fullTypeString) pattern from bak.
--- multiplier: batch count (each reward granted count * multiplier)
+-- 发放奖励物品，返回是否成功。失败时全部回滚。
+-- 使用 bak 中 inventory:AddItem(fullTypeString) 模式。
+-- multiplier：批次数（每份奖励发放 count * multiplier）
 -- ============================================================
 function EventTrigger.Delivery.GrantRewards(inventory, rewardItems, multiplier)
     multiplier = multiplier or 1
@@ -168,12 +168,12 @@ function EventTrigger.Delivery.GrantRewards(inventory, rewardItems, multiplier)
 end
 
 -- ============================================================
--- Client-side dual-match validation (no inventory changes)
+-- 客户端双重匹配校验（不修改背包）
 -- ============================================================
 function EventTrigger.Delivery.Validate(player, deliveryData)
     if not player or not deliveryData then return false, getText("UI_ET_Msg_InvalidData") end
     local inventory = player:getInventory()
-    -- Branch-aware resolve: 需求物品门槛 + 消耗 + 奖励 + matchMode
+    -- 分支感知解析：需求物品门槛 + 消耗 + 奖励 + matchMode
     local qualifyItems, costItems, _, matchMode = EventTrigger.Delivery.resolveView(deliveryData)
     local batchCount = tonumber(deliveryData._batchCount) or 1
     if batchCount < 1 then batchCount = 1 end
@@ -212,7 +212,7 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
         end
     end
 
-    -- Check cooldown
+    -- 检查冷却
     local cooldownOk, cooldownMsg = EventTrigger.Delivery.CheckCooldown(player, deliveryData)
     if not cooldownOk then
         return false, cooldownMsg
@@ -222,7 +222,7 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
 end
 
 -- ============================================================
--- Check cooldown for delivery (wall clock vs game clock)
+-- 检查交付冷却（真实时钟 vs 游戏时钟）
 -- ============================================================
 function EventTrigger.Delivery.CheckCooldown(player, deliveryData)
     local cooldown = deliveryData.cooldown or {}
@@ -247,10 +247,10 @@ function EventTrigger.Delivery.CheckCooldown(player, deliveryData)
 end
 
 -- ============================================================
--- Delivery Point Detection (trigger-point method: state on dp object)
+-- 交付点检测（触发点法：状态存储在 dp 对象上）
 -- ============================================================
-EventTrigger.Delivery._activePrompt = {}   -- playerKey -> dpId (only one UI at a time, player-global)
-EventTrigger.Delivery._pendingDpId = {}    -- playerKey -> dpId (which dp is in delivery flow)
+EventTrigger.Delivery._activePrompt = {}   -- playerKey -> dpId（同一时刻仅一个 UI，玩家全局）
+EventTrigger.Delivery._pendingDpId = {}    -- playerKey -> dpId（哪个 dp 处于交付流程中）
 
 function EventTrigger.Delivery.ResetPrompt(playerKey)
     if playerKey then
@@ -274,7 +274,7 @@ function EventTrigger.Delivery.CheckPlayerInRange(player)
             local dist = math.sqrt(dx*dx + dy*dy)
             local inRange = (pz == (dp.z or 0)) and (dist < (dp.range or 3.0))
 
-            -- Ensure _dlvPrompted table exists on dp (syncAll may have reset it; PlacePending sets it)
+            -- 确保 dp 上的 _dlvPrompted 表存在（syncAll 可能已重置；PlacePending 会设置它）
             if not dp._dlvPrompted then dp._dlvPrompted = {} end
 
             if inRange then
@@ -305,7 +305,7 @@ function EventTrigger.Delivery.CheckPlayerInRange(player)
                     end
                 end
             else
-                -- Player left range: clear this dp's prompt state
+                -- 玩家离开范围：清除该 dp 的提示状态
                 dp._dlvPrompted[playerKey] = nil
                 if EventTrigger.Delivery._activePrompt[playerKey] == dp.id then
                     EventTrigger.Delivery._activePrompt[playerKey] = nil
@@ -317,7 +317,7 @@ function EventTrigger.Delivery.CheckPlayerInRange(player)
 end
 
 -- ============================================================
--- Delivery Prompt UI (Yes/No modal)
+-- 交付提示 UI（是/否模态框）
 -- ============================================================
 function EventTrigger.Delivery.ShowDeliveryPrompt(dp)
     if EventTrigger.Delivery._promptUI then
@@ -498,14 +498,14 @@ function EventTriggerDeliveryPrompt:new(dp)
 end
 
 -- ============================================================
--- Delivery Confirm UI (shows required & reward items, Confirm/Cancel)
+-- 交付确认 UI（显示需求物品与奖励物品，确认/取消）
 -- ============================================================
 
--- Resolve the display/execution plan for a delivery (branch-aware).
--- Returns qualifyItems (需求物品/资格门槛) + costItems (消耗) + rewardItems + effective matchMode.
---   qualifyItems: requiredItems — the qualification gate (collect=true also consumes in legacy).
---   costItems: items actually deducted (legacy = collect=true requiredItems; branch = selected cost option).
---   branch: single selected cost item + branch rewards + "all" (choice already made).
+-- 解析交付的显示/执行方案（分支感知）。
+-- 返回 qualifyItems（需求物品/资格门槛）+ costItems（消耗）+ rewardItems + 有效 matchMode。
+--   qualifyItems：requiredItems — 资格门槛（collect=true 在旧版中同时消耗）。
+--   costItems：实际扣除的物品（旧版 = collect=true 的 requiredItems；分支 = 选中的消耗选项）。
+--   branch：单项选中的消耗物品 + 分支奖励 + "all"（已做过选择）。
 function EventTrigger.Delivery.resolveView(delivery)
     local branches = delivery.branches or {}
 
@@ -520,7 +520,7 @@ function EventTrigger.Delivery.resolveView(delivery)
         }
     end
 
-    -- Legacy path: 消耗 = requiredItems 中 collect=true 的
+    -- 旧版路径：消耗 = requiredItems 中 collect=true 的
     if #branches == 0 then
         local costItems = {}
         for _, req in ipairs(delivery.requiredItems or {}) do
@@ -536,7 +536,7 @@ function EventTrigger.Delivery.resolveView(delivery)
         return qualifyItems, costItems, (delivery.rewardItems or {}), (delivery.matchMode or "all")
     end
 
-    -- Branch path
+    -- 分支路径
     local branch = branches[1]
     local bid = delivery._selectedBranchId
     if bid and branches[bid] and branches[bid].enabled ~= false then
@@ -579,9 +579,9 @@ function EventTrigger.Delivery.resolveView(delivery)
     return qualifyItems, costItems, (branch.rewards or {}), "all"
 end
 
--- Clear per-delivery transient selection state (branch / cost option / OR index).
--- These are runtime-only; leftover values would skip selection dialogs on the next
--- trigger and make player-facing behavior inconsistent.
+-- 清除单次交付的临时选择状态（分支 / 消耗选项 / OR 索引）。
+-- 这些仅运行时使用；残留值会让下次触发跳过选择对话框，
+-- 导致玩家可见行为不一致。
 function EventTrigger.Delivery.ClearSelection(delivery)
     if not delivery then return end
     delivery._selectedBranchId = nil
@@ -599,8 +599,8 @@ function EventTrigger.Delivery.ShowDeliveryConfirm(player, delivery)
 
     local branches = delivery.branches or {}
 
-    -- 需求2: multiple reward branches → branch selection first.
-    -- Skip if a branch has already been chosen (avoids re-showing the selector).
+    -- 需求2：多个奖励分支 → 先选分支。
+    -- 若分支已选过则跳过（避免重复弹出选择器）。
     if #branches >= 2 then
         local chosen = delivery._selectedBranchId
         if not chosen or not branches[chosen] or branches[chosen].enabled == false then
@@ -609,13 +609,13 @@ function EventTrigger.Delivery.ShowDeliveryConfirm(player, delivery)
         end
     end
 
-    -- Single branch: preselect it
+    -- 单分支：预选它
     if #branches == 1 then
         delivery._selectedBranchId = branches[1].id
     end
 
-    -- 需求3: multiple cost options → cost option selection first.
-    -- Skip if already chosen (avoids re-showing the selector).
+    -- 需求3：多个消耗选项 → 先选消耗选项。
+    -- 若已选过则跳过（避免重复弹出选择器）。
     if #branches >= 1 then
         local branch = branches[delivery._selectedBranchId] or branches[1]
         local costOptions = branch and (branch.costOptions or {}) or {}
@@ -628,7 +628,7 @@ function EventTrigger.Delivery.ShowDeliveryConfirm(player, delivery)
         end
     end
 
-    -- Legacy ANY mode with multiple collect items → item selection
+    -- 旧版 ANY 模式且多个可收集项 → 选择物品
     if #branches == 0 and (delivery.matchMode or "all") == "any" then
         local collectCount = 0
         for _, req in ipairs(delivery.requiredItems or {}) do
@@ -689,7 +689,7 @@ function EventTriggerDeliveryConfirm:create()
     self.itemY = 28 + math.floor(18 * EventTrigger.US)
 end
 
--- Finalize a delivery transaction (single or batch), shared by confirm + batch flows.
+-- 完成交付事务（单次或批量），供确认流程与批量流程共用。
 function EventTrigger.Delivery.FinalizeDelivery(player, delivery, batchCount)
     if not player or not delivery then return end
     batchCount = tonumber(batchCount) or 1
@@ -700,10 +700,9 @@ function EventTrigger.Delivery.FinalizeDelivery(player, delivery, batchCount)
     EventTrigger.Delivery._activePrompt[playerKey] = nil
     EventTrigger.Delivery._pendingDpId[playerKey] = nil
 
-    -- Determine selectedORIndex for legacy ANY mode ONLY.
-    -- Branch mode resolves a single cost item inside resolveView(), so deriving
-    -- an OR index here would desync from the 1-item cost list and could result
-    -- in "no item deducted but reward granted".
+    -- 仅旧版 ANY 模式需要确定 selectedORIndex。
+    -- 分支模式在 resolveView() 内部已解析出单一消耗物品，此时推导
+    -- OR 索引会与单元素消耗列表失同步，可能导致"未扣除物品却发放奖励"。
     local branches = delivery.branches or {}
     local matchMode = delivery.matchMode or "all"
     local selectedORIndex = nil
@@ -810,7 +809,7 @@ function EventTriggerDeliveryConfirm:prerender()
     local rowH = math.floor(20 * s)
     local y = self.itemY
 
-    -- Top info: match mode (legacy only) + cooldown
+    -- 顶部信息：匹配模式（仅旧版）+ 冷却
     local branches = delivery.branches or {}
     if #branches == 0 then
         local modeStr = (delivery.matchMode == "any") and getText("UI_ET_Dlv_Any") or getText("UI_ET_Dlv_All")
@@ -826,10 +825,10 @@ function EventTriggerDeliveryConfirm:prerender()
         y = y + rowH
     end
 
-    -- Resolve the effective plan: 需求物品 / 消耗物品 / 奖励
+    -- 解析有效方案：需求物品 / 消耗物品 / 奖励
     local qualifyItems, costItems, rewItems = EventTrigger.Delivery.resolveView(delivery)
 
-    -- Assemble columns: 需求(若有) + 消耗(若有) + 奖励(始终)
+    -- 组装列：需求（若有）+ 消耗（若有）+ 奖励（始终）
     local columns = {}
     if #qualifyItems > 0 then
         columns[#columns + 1] = { title = getText("UI_ET_Dlv_RequiredItems"), items = qualifyItems, isQualify = true, color = {0.9, 0.7, 0.3} }
@@ -897,7 +896,7 @@ function EventTriggerDeliveryConfirm:new(player, delivery)
 end
 
 -- ============================================================
--- Batch Count Prompt (choose N, preview totals, then finalize)
+-- 批量数量提示框（选择 N，预览总量，然后完成）
 -- ============================================================
 EventTrigger.Delivery._batchPromptUI = nil
 
@@ -1067,7 +1066,7 @@ function EventTriggerBatchCountPrompt:prerender()
     local padX = self.padX
     local rowH = self.rowH
 
-    -- Cost header
+    -- 消耗标题
     self:drawText(getText("UI_ET_Batch_Cost"), padX, self.costHeaderY, 0.9, 0.7, 0.3, 1, UIFont.Small)
     local cy = self.costItemsY
     for _, c in ipairs(self.costItems) do
@@ -1076,7 +1075,7 @@ function EventTriggerBatchCountPrompt:prerender()
         cy = cy + rowH
     end
 
-    -- Reward header
+    -- 奖励标题
     self:drawText(getText("UI_ET_Batch_Reward"), padX, self.rewardHeaderY, 0.3, 0.9, 0.5, 1, UIFont.Small)
     local ry = self.rewardItemsY
     for _, r in ipairs(self.rewardItems or {}) do
@@ -1085,10 +1084,10 @@ function EventTriggerBatchCountPrompt:prerender()
         ry = ry + rowH
     end
 
-    -- Input label
+    -- 输入标签
     self:drawText(getText("UI_ET_Batch_Count"), padX, self.entryY - rowH, 0.7, 0.8, 0.9, 1, UIFont.Small)
 
-    -- Preview (read current entry value, clamp to maxN)
+    -- 预览（读取当前输入值，钳制到 maxN）
     local raw = self.entry and self.entry:getText() or ""
     local n = tonumber(raw) or 1
     n = math.floor(n)
@@ -1128,7 +1127,7 @@ function EventTriggerBatchCountPrompt:new(player, delivery)
 end
 
 -- ============================================================
--- Branch Selection UI (需求2: same consume, multiple reward branches)
+-- 分支选择 UI（需求2：相同消耗，多个奖励分支）
 -- ============================================================
 EventTrigger.Delivery._branchSelectUI = nil
 
@@ -1167,7 +1166,7 @@ function EventTriggerBranchSelectPrompt:create()
         end
     end
 
-    -- Shared cost options (same consume across all branches)
+    -- 共享消耗选项（所有分支消耗相同）
     self.costOptions = {}
     if #self.branches > 0 then
         for _, co in ipairs(self.branches[1].costOptions or {}) do
@@ -1175,7 +1174,7 @@ function EventTriggerBranchSelectPrompt:create()
         end
     end
     if #self.costOptions == 0 then
-        -- Fallback: legacy required items
+        -- 回退：旧版需求物品
         for _, req in ipairs(self.delivery.requiredItems or {}) do
             if req.collect ~= false then
                 self.costOptions[#self.costOptions + 1] = req
@@ -1251,7 +1250,7 @@ function EventTriggerBranchSelectPrompt:onMouseDown(x, y)
         self:setCapture(true)
         return true
     end
-    -- Click a branch row selects it
+    -- 点击分支行选中它
     for idx = 1, #self.branches do
         local iy = self.listStartY + (idx - 1) * self.rowH
         if y >= iy and y < iy + self.rowH then
@@ -1287,8 +1286,8 @@ function EventTriggerBranchSelectPrompt:prerender()
 
     local leftX = 24
 
-    -- Cost display: multiple costOptions are mutually-exclusive (choose one);
-    -- a single costOption is a fixed requirement. Make the label match the semantics.
+    -- 消耗显示：多个 costOption 互斥（选其一）；
+    -- 单个 costOption 是固定要求。标签需与实际语义一致。
     local costLabel
     if #self.costOptions > 1 then
         costLabel = getText("UI_ET_Branch_CostAlt")
@@ -1307,7 +1306,7 @@ function EventTriggerBranchSelectPrompt:prerender()
         end
     end
 
-    -- Divider between cost and branch list
+    -- 消耗与分支列表之间的分隔线
     self:drawRect(leftX, self.listStartY - 5, self.width - 48, 1, 0.4, 0.4, 0.4, 0.4)
 
     for idx, b in ipairs(self.branches) do
@@ -1323,7 +1322,7 @@ function EventTriggerBranchSelectPrompt:prerender()
             self:drawRect(leftX + 4, cy + 4, self.radioSize - 8, self.radioSize - 8, 1, 0.3, 0.9, 0.3)
         end
 
-        -- Rewards summary
+        -- 奖励摘要
         local rewardParts = {}
         for _, r in ipairs(b.rewards or {}) do
             rewardParts[#rewardParts + 1] = (r.displayName or "?") .. " x" .. tostring(r.count)
@@ -1355,7 +1354,7 @@ function EventTriggerBranchSelectPrompt:new(player, delivery)
 end
 
 -- ============================================================
--- Cost Option Selection UI (需求3: same reward, multiple consume choices)
+-- 消耗选项选择 UI（需求3：相同奖励，多个消耗选择）
 -- ============================================================
 EventTrigger.Delivery._costOptionSelectUI = nil
 
@@ -1388,11 +1387,11 @@ function EventTriggerCostOptionSelectPrompt:create()
     self.radioSize = 18
     self.selectedIndex = nil
 
-    -- Resolve the selected branch
+    -- 解析选中的分支
     local branches = self.delivery.branches or {}
     self.branch = branches[self.delivery._selectedBranchId] or branches[1]
 
-    -- Build available cost options (only those the player owns, filtered)
+    -- 构建可用消耗选项（仅保留玩家持有的，已过滤）
     self.costOptions = self.branch and (self.branch.costOptions or {}) or {}
     self.ownedOptions = {}
     local player = self.player
@@ -1516,7 +1515,7 @@ function EventTriggerCostOptionSelectPrompt:prerender()
 
     local leftX = 24
 
-    -- Reward (fixed) display
+    -- 奖励（固定）显示
     self:drawText(getText("UI_ET_CostOption_Reward"), leftX, self.costHeaderY, 0.3, 0.9, 0.5, 1, UIFont.Small)
     local rwY = self.costItemsY
     local rewItems = self.branch and (self.branch.rewards or {}) or {}
@@ -1530,10 +1529,10 @@ function EventTriggerCostOptionSelectPrompt:prerender()
         end
     end
 
-    -- Divider
+    -- 分隔线
     self:drawRect(leftX, self.listStartY - 5, self.width - 48, 1, 0.4, 0.4, 0.4, 0.4)
 
-    -- Cost options (selectable, filtered by owned)
+    -- 消耗选项（可选，按持有量过滤）
     if #self.ownedOptions == 0 then
         self:drawText(getText("UI_ET_CostOption_None"), leftX + 8, self.listStartY + 4, 0.9, 0.5, 0.5, 1, UIFont.Small)
     else
@@ -1577,7 +1576,7 @@ function EventTriggerCostOptionSelectPrompt:new(player, delivery)
 end
 
 -- ============================================================
--- Item Selection UI for OR mode (choose which item to use)
+-- OR 模式物品选择 UI（选择使用哪个物品）
 -- ============================================================
 EventTrigger.Delivery._itemSelectUI = nil
 
@@ -1615,7 +1614,7 @@ function EventTriggerDeliveryItemSelectOR:create()
     self.radioSize = 18
     self.selectedItemIndex = nil
 
-    -- Bottom buttons (centered on TRUE widths so they never overlap)
+    -- 底部按钮（按真实宽度居中，永不重叠）
     local bh = 34
     local gap = 24
     local btnY = self.height - bh - 18
@@ -1637,7 +1636,7 @@ function EventTriggerDeliveryItemSelectOR:create()
     self.closeBtn:initialise()
     self:addChild(self.closeBtn)
 
-    -- Find matching items in player inventory
+    -- 在玩家背包中查找匹配物品
     self:findMatchingItems()
 end
 
@@ -1680,7 +1679,7 @@ function EventTriggerDeliveryItemSelectOR:onConfirm()
     end
     self:close()
     
-    -- Store selected item index for Execute
+    -- 保存选中的物品索引供 Execute 使用
     self.delivery._selectedORItemIndex = self.selectedItemIndex
     
     local ok, msg = EventTrigger.Delivery.Validate(player, self.delivery)
@@ -1735,10 +1734,10 @@ function EventTriggerDeliveryItemSelectOR:prerender()
     local delivery = self.delivery
     if not delivery then return end
 
-    -- Vertical divider between the two columns
+    -- 两列之间的竖直分隔线
     self:drawRect(self.midX, self.listStartY - 8, 1, self.height - self.listStartY - 70, 0.35, 0.35, 0.35, 0.35)
 
-    -- ===== LEFT COLUMN: required items to choose from =====
+    -- ===== 左列：可供选择的必需物品 =====
     self:drawText(getText("UI_ET_Dlv_ChooseItem"), self.leftX, self.infoY, 0.8, 0.8, 0.8, 1, UIFont.Small)
 
     local cd = delivery.cooldown or {}
@@ -1764,26 +1763,26 @@ function EventTriggerDeliveryItemSelectOR:prerender()
                 self:drawRect(self.leftX, iy, self.colW, self.rowH - 2, 0.3, 0.25, 0.1, 0.3)
             end
 
-            -- Radio circle (vertically centered within the row)
+            -- 单选圆圈（在行内垂直居中）
             local cy = iy + (self.rowH - self.radioSize) / 2
             self:drawRectBorder(self.leftX, cy, self.radioSize, self.radioSize, 0.8, 0.8, 0.8, 0.8)
             if selected then
                 self:drawRect(self.leftX + 4, cy + 4, self.radioSize - 8, self.radioSize - 8, 1, 0.3, 0.9, 0.3)
             end
 
-            -- Item name x count (fitted to stay clear of the tag)
+            -- 物品名 x 数量（适配长度以免与标签重叠）
             local txt = fitText((req.displayName or "?") .. "  x" .. tostring(req.count), UIFont.Small, self.colW - 86)
             local color = hasItem and {1, 1, 1} or {0.85, 0.4, 0.4}
             self:drawText(txt, self.leftX + self.radioSize + 12, iy + 8, color[1], color[2], color[3], 1, UIFont.Small)
 
-            -- Availability tag, right-aligned within the column
+            -- 可用性标签，在列内右对齐
             local tag = hasItem and "[OK]" or "[MISSING]"
             local tagColor = hasItem and {0.4, 0.9, 0.5} or {0.9, 0.4, 0.4}
             self:drawTextRight(tag, self.leftX + self.colW - 4, iy + 8, tagColor[1], tagColor[2], tagColor[3], 1, UIFont.Small)
         end
     end
 
-    -- ===== RIGHT COLUMN: rewards (read-only list) =====
+    -- ===== 右列：奖励（只读列表） =====
     self:drawText(getText("UI_ET_Dlv_Rewards"), self.rightX, self.infoY, 0.4, 0.9, 0.5, 1, UIFont.Small)
 
     local rewItems = delivery.rewardItems or {}
@@ -1808,7 +1807,7 @@ function EventTriggerDeliveryItemSelectOR:onMouseDown(x, y)
         return true
     end
 
-    -- Click a row in the LEFT column selects it (matches prerender row layout)
+    -- 点击左列中的某一行选中它（与 prerender 行布局对应）
     local reqItems = self.delivery.requiredItems or {}
     for idx = 1, #reqItems do
         local iy = self.listStartY + (idx - 1) * self.rowH
@@ -1842,7 +1841,7 @@ function EventTriggerDeliveryItemSelectOR:new(player, delivery)
 end
 
 -- ============================================================
--- Delivery Point Setup Wizard (Section 3)
+-- 交付点设置向导（第 3 节）
 -- ============================================================
 EventTrigger.Delivery._setupPending = nil
 
@@ -1972,7 +1971,7 @@ function EventTrigger.Delivery.PromptCooldown()
     modal:addToUIManager()
 end
 
--- 需求2: choose how many reward branches (same consume, multiple rewards)
+-- 需求2：选择奖励分支数量（相同消耗，多个奖励）
 function EventTrigger.Delivery.PromptBranchCount()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
@@ -2002,7 +2001,7 @@ function EventTrigger.Delivery.PromptRequiredItems()
     EventTrigger.Delivery.ShowItemSelection("required")
 end
 
--- 需求3: independent consume-option configuration (multiple optional consume items, same reward).
+-- 需求3：独立配置消耗选项（多个可选消耗物品，相同奖励）。
 function EventTrigger.Delivery.PromptCostOptions()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
@@ -2014,10 +2013,10 @@ function EventTrigger.Delivery.PromptRewardItems()
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
     if (p.branchCount or 1) <= 1 then
-        -- Single branch: legacy reward flow
+        -- 单分支：旧版奖励流程
         EventTrigger.Delivery.ShowItemSelection("reward")
     else
-        -- Multi-branch: configure branch 1 rewards
+        -- 多分支：配置分支 1 的奖励
         p._currentBranchIdx = 1
         p.rewardItems = p.branchRewards[1] or {}
         EventTrigger.Delivery.ShowItemSelection("reward_branch")
@@ -2025,7 +2024,7 @@ function EventTrigger.Delivery.PromptRewardItems()
 end
 
 -- ============================================================
--- Item Selection UI for Setup Wizard (paginated inventory browser)
+-- 设置向导的物品选择 UI（分页背包浏览器）
 -- ============================================================
 EventTrigger.Delivery._selectionUI = nil
 EventTrigger.Delivery._selectionMode = nil
@@ -2034,9 +2033,9 @@ function EventTrigger.Delivery.ShowItemSelection(mode)
     if EventTrigger.Delivery._selectionUI then
         EventTrigger.Delivery._selectionUI:close()
     end
-    -- Set the mode BEFORE initialise(), because initialise() -> create() renders
-    -- the panels and reads _selectionMode. Previously it was set after, so the
-    -- reward panel rendered with the stale "required" mode on first frame.
+    -- 必须在 initialise() 之前设置 mode，因为 initialise() -> create() 会渲染
+    -- 面板并读取 _selectionMode。此前是在其后设置，导致首帧
+    -- 奖励面板会以过期的 "required" 模式渲染。
     EventTrigger.Delivery._selectionMode = mode
     local ui = EventTriggerDeliveryItemSelect:new(mode)
     ui:initialise()
@@ -2054,19 +2053,19 @@ end
 function EventTriggerDeliveryItemSelect:create()
     self:setAlwaysOnTop(true)
 
-    -- Close button
+    -- 关闭按钮
     self.closeBtn = ISButton:new(self.width - 25, 4, 21, 21, "X", self, EventTriggerDeliveryItemSelect.onCancel)
     self.closeBtn:initialise()
     self:addChild(self.closeBtn)
 
-    -- Done / Next button (right-aligned, true width)
+    -- 完成 / 下一步按钮（右对齐，真实宽度）
     local doneLabel = getText("UI_ET_Btn_DoneNext")
     local doneW = EventTrigger.btnW(doneLabel)
     self.doneBtn = ISButton:new(self.width - doneW - 14, self.height - 42, doneW, 32, doneLabel, self, EventTriggerDeliveryItemSelect.onDone)
     self.doneBtn:initialise()
     self:addChild(self.doneBtn)
 
-    -- Back / Cancel / Refresh buttons (left, flow layout with true widths)
+    -- 后退 / 取消 / 刷新按钮（左侧，按真实宽度流式布局）
     local btnY = self.height - 42
     local bx = 14
     local function placeLeft(title, handler)
@@ -2081,7 +2080,7 @@ function EventTriggerDeliveryItemSelect:create()
     placeLeft(getText("UI_ET_Btn_Cancel"), EventTriggerDeliveryItemSelect.onCancel)
     self.refreshBtn = placeLeft(getText("UI_ET_Btn_Refresh"), EventTriggerDeliveryItemSelect.onRefresh)
 
-    -- Layout params (two-column: left=list, right=selected)
+    -- 布局参数（两列：左=列表，右=已选）
     self.contentY = 36
     self.contentH = self.height - 82
     self.midX = math.floor(self.width / 2)
@@ -2098,7 +2097,7 @@ function EventTriggerDeliveryItemSelect:create()
     self:updateRightPanel()
 end
 
--- Clear all row-related children
+-- 清除所有行相关子控件
 function EventTriggerDeliveryItemSelect:clearRows()
     for _, child in ipairs(self.rowChildren or {}) do
         child:removeFromUIManager()
@@ -2107,7 +2106,7 @@ function EventTriggerDeliveryItemSelect:clearRows()
     self.rowChildren = {}
 end
 
--- Clear all selected-related children
+-- 清除所有已选相关子控件
 function EventTriggerDeliveryItemSelect:clearSelected()
     for _, child in ipairs(self.selectedChildren or {}) do
         child:removeFromUIManager()
@@ -2116,7 +2115,7 @@ function EventTriggerDeliveryItemSelect:clearSelected()
     self.selectedChildren = {}
 end
 
--- Collect inventory data (de-duplicate by FullType+DisplayName)
+-- 收集背包数据（按 FullType+DisplayName 去重）
 function EventTriggerDeliveryItemSelect:buildItemData()
     self.inventoryData = {}
     local player = getPlayer()
@@ -2140,7 +2139,7 @@ function EventTriggerDeliveryItemSelect:buildItemData()
     self.totalPages = math.max(1, math.ceil(#self.inventoryData / self.rowsPerPage))
 end
 
--- ============ LEFT PANEL: Inventory Browser ============
+-- ============ 左面板：背包浏览器 ============
 function EventTriggerDeliveryItemSelect:updateLeftPanel()
     self:clearRows()
 
@@ -2156,14 +2155,14 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
     local startY = self.contentY + 6
     local headingH = 22
 
-    -- Heading
+    -- 标题
     local titleStr = getText("UI_ET_Inv_Title") .. "  (" .. getText("UI_ET_Inv_Page", self.leftPage + 1, self.totalPages) .. ")"
     local heading = ISLabel:new(x, startY, 20, titleStr, 0.55, 0.8, 1, 1, UIFont.Small, true)
     heading:initialise()
     self:addChild(heading)
     table.insert(self.rowChildren, heading)
 
-    -- Page buttons
+    -- 翻页按钮
     if self.totalPages > 1 then
         local prevBtn = ISButton:new(x + w - 46, startY - 1, 18, 18, "<", self, EventTriggerDeliveryItemSelect.onLeftPrev)
         prevBtn:initialise()
@@ -2195,24 +2194,24 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
             end
         end
 
-        -- Text keeps clear of the right-side button strip (max ~150px)
+        -- 文本避让右侧按钮条（最多约 150px）
         local textW = w - 156
 
-        -- DisplayName (top)
+        -- DisplayName（上方）
         local name = fitText(data.displayName or "?", UIFont.Small, textW)
         local lbl = ISLabel:new(x + 4, y + 4, 18, name, 1, 1, 1, 1, UIFont.Small, true)
         lbl:initialise()
         self:addChild(lbl)
         table.insert(self.rowChildren, lbl)
 
-        -- FullType (bottom, dimmer)
+        -- FullType（下方，较暗）
         local ft = fitText("[" .. (data.fullType or "?") .. "]", UIFont.Small, textW)
         local ftLbl = ISLabel:new(x + 4, y + 24, 18, ft, 0.45, 0.5, 0.65, 1, UIFont.Small, true)
         ftLbl:initialise()
         self:addChild(ftLbl)
         table.insert(self.rowChildren, ftLbl)
 
-        -- Action buttons — placed right-to-left using TRUE (auto-expanded) widths
+        -- 操作按钮 — 从右到左放置，使用真实（自动扩展后）宽度
         local btnY = y + 10
         local gap = 6
         local rightEdge = x + w - 6
@@ -2251,14 +2250,14 @@ function EventTriggerDeliveryItemSelect:onLeftNext()
     if self.leftPage < self.totalPages - 1 then self.leftPage = self.leftPage + 1; self:updateLeftPanel() end
 end
 
--- Mouse wheel on left side
+-- 左侧鼠标滚轮
 function EventTriggerDeliveryItemSelect:onMouseWheel(del)
     local mx = getMouseX() - self:getAbsoluteX()
     if mx < self.midX then
         if del > 0 and self.leftPage > 0 then self.leftPage = self.leftPage - 1; self:updateLeftPanel()
         elseif del < 0 and self.leftPage < self.totalPages - 1 then self.leftPage = self.leftPage + 1; self:updateLeftPanel() end
     else
-        -- right side: selected items pagination
+        -- 右侧：已选物品分页
         local p = EventTrigger.Delivery._setupPending
         if not p then return end
         local mode = EventTrigger.Delivery._selectionMode or "required"
@@ -2269,7 +2268,7 @@ function EventTriggerDeliveryItemSelect:onMouseWheel(del)
     end
 end
 
--- ============ RIGHT PANEL: Selected Items ============
+-- ============ 右面板：已选物品 ============
 function EventTriggerDeliveryItemSelect:updateRightPanel()
     self:clearSelected()
 
@@ -2286,14 +2285,14 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
     local startY = self.contentY + 6
     local headingH = 22
 
-    -- Heading
+    -- 标题
     local titleStr = getText("UI_ET_Inv_Selected") .. "  (" .. getText("UI_ET_Inv_Page", self.rightPage + 1, selTotal) .. ")"
     local heading = ISLabel:new(x, startY, 20, titleStr, 0.85, 0.85, 0.5, 1, UIFont.Small, true)
     heading:initialise()
     self:addChild(heading)
     table.insert(self.selectedChildren, heading)
 
-    -- Page buttons
+    -- 翻页按钮
     if selTotal > 1 then
         local prevBtn = ISButton:new(x + self.rightW - 46, startY - 1, 18, 18, "<", self, EventTriggerDeliveryItemSelect.onRightPrev)
         prevBtn:initialise()
@@ -2328,7 +2327,7 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
         local itemIdx = i + 1
         local isRequired = (mode == "required")
 
-        -- Top row: item name x count (left) + Qty/Remove buttons (right)
+        -- 顶行：物品名 x 数量（左）+ 数量/移除 按钮（右）
         local textW = self.rightW - 156
         local txt = fitText((si.displayName or "?") .. "  x" .. tostring(si.count), UIFont.Small, textW)
         local lbl = ISLabel:new(x + 4, y + 4, 18, txt, 1, 1, 0.85, 1, UIFont.Small, true)
@@ -2336,7 +2335,7 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
         self:addChild(lbl)
         table.insert(self.selectedChildren, lbl)
 
-        -- Action buttons — right-to-left using TRUE (auto-expanded) widths
+        -- 操作按钮 — 从右到左，使用真实（自动扩展后）宽度
         local gap = 6
         local rightEdge = x + self.rightW - 6
         local function makeRightBtn(title, handler, rightX)
@@ -2352,7 +2351,7 @@ function EventTriggerDeliveryItemSelect:updateRightPanel()
         local delBtn = makeRightBtn(getText("UI_ET_Inv_Remove"), EventTriggerDeliveryItemSelect.onDelItem, rightEdge)
         makeRightBtn(getText("UI_ET_Inv_Qty"), EventTriggerDeliveryItemSelect.onEditQty, delBtn.x - gap)
 
-        -- Bottom row: FullType (left) + Collect checkbox (right, required only)
+        -- 底行：FullType（左）+ Collect 复选框（右，仅 required）
         local ftW = isRequired and (self.rightW - 120) or (self.rightW - 20)
         local ft = fitText("[" .. (si.fullType or "?") .. "]", UIFont.Small, ftW)
         local ftLbl = ISLabel:new(x + 4, y + 24, 18, ft, 0.45, 0.5, 0.65, 1, UIFont.Small, true)
@@ -2401,8 +2400,8 @@ function EventTriggerDeliveryItemSelect:refreshUI()
     self:updateRightPanel()
 end
 
--- Manual refresh: re-scan player inventory and rebuild both panels.
--- Uses the same logic as create() (buildItemData + updateLeftPanel + updateRightPanel).
+-- 手动刷新：重新扫描玩家背包并重建两侧面板。
+-- 与 create() 使用相同逻辑（buildItemData + updateLeftPanel + updateRightPanel）。
 function EventTriggerDeliveryItemSelect:onRefresh()
     self.leftPage = 0
     self.rightPage = 0
@@ -2411,7 +2410,7 @@ function EventTriggerDeliveryItemSelect:onRefresh()
     self:updateRightPanel()
 end
 
--- Add item from inventory list
+-- 从背包列表添加物品
 function EventTriggerDeliveryItemSelect:onAddItem(btn)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
@@ -2429,7 +2428,7 @@ function EventTriggerDeliveryItemSelect:onAddItem(btn)
     EventTrigger.Delivery.PromptItemQuantity(#itemList, mode, self)
 end
 
--- Change quantity of selected item from inventory list
+-- 从背包列表修改已选物品的数量
 function EventTriggerDeliveryItemSelect:onQtyItem(btn)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
@@ -2444,7 +2443,7 @@ function EventTriggerDeliveryItemSelect:onQtyItem(btn)
     end
 end
 
--- Remove item from selected list (via inventory list button)
+-- 从已选列表移除物品（通过背包列表按钮触发）
 function EventTriggerDeliveryItemSelect:onRemoveItem(btn)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
@@ -2460,7 +2459,7 @@ function EventTriggerDeliveryItemSelect:onRemoveItem(btn)
     self:refreshUI()
 end
 
--- Edit quantity from selected panel
+-- 从已选面板修改数量
 function EventTriggerDeliveryItemSelect:onEditQty(btn)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
@@ -2468,7 +2467,7 @@ function EventTriggerDeliveryItemSelect:onEditQty(btn)
     EventTrigger.Delivery.PromptItemQuantity(btn.itemIndex, mode, self)
 end
 
--- Delete from selected panel
+-- 从已选面板删除
 function EventTriggerDeliveryItemSelect:onDelItem(btn)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
@@ -2481,7 +2480,7 @@ function EventTriggerDeliveryItemSelect:onDelItem(btn)
     self:refreshUI()
 end
 
--- Toggle collect checkbox for required items
+-- 切换需求物品的 collect 复选框
 function EventTriggerDeliveryItemSelect:onToggleCollect(idx)
     local p = EventTrigger.Delivery._setupPending
     if not p then return end
@@ -2506,7 +2505,7 @@ function EventTriggerDeliveryItemSelect:onDone()
     elseif mode == "cost" then
         EventTrigger.Delivery.PromptRewardItems()
     elseif mode == "reward_branch" then
-        -- Save this branch's rewards, advance to next
+        -- 保存此分支的奖励，推进到下一个
         local idx = p._currentBranchIdx or 1
         p.branchRewards = p.branchRewards or {}
         p.branchRewards[idx] = p.rewardItems or {}
@@ -2518,7 +2517,7 @@ function EventTriggerDeliveryItemSelect:onDone()
             EventTrigger.Delivery.PlacePending()
         end
     else
-        -- reward mode done -> place the delivery point
+        -- reward 模式完成 -> 放置交付点
         EventTrigger.Delivery.PlacePending()
     end
 end
@@ -2527,25 +2526,25 @@ function EventTriggerDeliveryItemSelect:onBack()
     local mode = self.mode or EventTrigger.Delivery._selectionMode or "required"
     self:close()
     if mode == "required" then
-        -- required items -> back to branch count
+        -- 需求物品 -> 返回分支数量
         EventTrigger.Delivery.PromptBranchCount()
     elseif mode == "cost" then
-        -- cost options -> back to required items
+        -- 消耗选项 -> 返回需求物品
         EventTrigger.Delivery.PromptRequiredItems()
     elseif mode == "reward_branch" then
         local p = EventTrigger.Delivery._setupPending
         local idx = p and (p._currentBranchIdx or 1)
         if idx and idx > 1 then
-            -- back to previous branch's rewards
+            -- 返回上一分支的奖励
             p._currentBranchIdx = idx - 1
             p.rewardItems = p.branchRewards[idx - 1] or {}
             EventTrigger.Delivery.ShowItemSelection("reward_branch")
         else
-            -- back to cost options
+            -- 返回消耗选项
             EventTrigger.Delivery.PromptCostOptions()
         end
     else
-        -- reward items -> back to cost options
+        -- 奖励物品 -> 返回消耗选项
         EventTrigger.Delivery.PromptCostOptions()
     end
 end
@@ -2583,14 +2582,14 @@ function EventTriggerDeliveryItemSelect:prerender()
     end
     self:drawTextCentre(titleStr, self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
 
-    -- Left panel background (inventory list)
+    -- 左面板背景（背包列表）
     self:drawRect(8, self.contentY, self.leftW, self.contentH, 0.12, 0.04, 0.04, 0.04)
 
-    -- Right panel background (selected)
+    -- 右面板背景（已选）
     local rx = self.midX + 6
     self:drawRect(rx, self.contentY, self.rightW, self.contentH, 0.08, 0.06, 0.04, 0.04)
 
-    -- Vertical divider
+    -- 竖直分隔线
     self:drawRect(self.midX, self.contentY, 2, self.contentH, 0.35, 0.55, 0.55, 0.55)
 end
 
@@ -2615,7 +2614,7 @@ function EventTriggerDeliveryItemSelect:new(mode)
 end
 
 -- ============================================================
--- Quantity input prompt (ISTextBox)
+-- 数量输入提示框（ISTextBox）
 -- ============================================================
 function EventTrigger.Delivery.PromptItemQuantity(idx, mode, parentUI)
     local p = EventTrigger.Delivery._setupPending
@@ -2645,7 +2644,7 @@ function EventTrigger.Delivery.PromptItemQuantity(idx, mode, parentUI)
 end
 
 -- ============================================================
--- Finalize delivery point placement
+-- 完成交付点放置
 -- ============================================================
 function EventTrigger.Delivery.PlacePending()
     local p = EventTrigger.Delivery._setupPending
@@ -2656,10 +2655,10 @@ function EventTrigger.Delivery.PlacePending()
 
     local isEditing = p._editing
 
-    -- Build branches (需求2: multi-reward; 需求3: multi-consume).
-    -- 需求3 consume options come from the independent "cost" step (p.costOptions),
-    -- NOT from ET's native ANY/ALL qualification (requiredItems + matchMode).
-    -- Branch model is used when: explicit cost options configured, OR multi-reward branches.
+    -- 构建分支（需求2：多奖励；需求3：多消耗）。
+    -- 需求3 消耗选项来自独立的 "cost" 步骤（p.costOptions），
+    -- 而非 ET 原生的 ANY/ALL 资格（requiredItems + matchMode）。
+    -- 满足以下任一条件时使用分支模型：显式配置了消耗选项，或多奖励分支。
     local branchCount = p.branchCount or 1
     local hasExplicitCost = #(p.costOptions or {}) > 0
     local branches = {}
@@ -2674,7 +2673,7 @@ function EventTrigger.Delivery.PlacePending()
             }
         end
         if #costOptions == 0 then
-            -- 需求2 fallback: shared consume derived from requiredItems (collect=true)
+            -- 需求2 回退：共享消耗从 requiredItems（collect=true）推导
             for _, r in ipairs(p.requiredItems or {}) do
                 if r.collect ~= false then
                     costOptions[#costOptions + 1] = {
@@ -2722,7 +2721,7 @@ function EventTrigger.Delivery.PlacePending()
         " editing=", tostring(isEditing))
 
     if isEditing then
-        -- Edit mode: update existing delivery point
+        -- 编辑模式：更新已有交付点
         local dlvIdx = p._editDlvIdx
         local dp = EventTrigger.deliveryPoints[dlvIdx]
         if dp then
@@ -2744,7 +2743,7 @@ function EventTrigger.Delivery.PlacePending()
         return
     end
 
-    -- Add locally for immediate feedback, server persists + broadcasts syncAll for confirmation
+    -- 本地立即添加以给出反馈，服务器持久化并广播 syncAll 确认
     local dp = {
         id = "dlv_" .. tostring(os.time()) .. "_" .. tostring(ZombRand(10000, 99999)),
         type = "delivery",
@@ -2775,7 +2774,7 @@ function EventTrigger.Delivery.PlacePending()
 end
 
 -- ============================================================
--- Handle server delivery result (add rewards on success)
+-- 处理服务器交付结果（成功时发放奖励）
 -- ============================================================
 function EventTrigger.Delivery.OnDeliveryResult(player, success, message, rewardItems)
     local playerKey = playerKeyOf(player)
@@ -2791,7 +2790,7 @@ function EventTrigger.Delivery.OnDeliveryResult(player, success, message, reward
 end
 
 -- ============================================================
--- Clean up all delivery UIs
+-- 清理全部交付 UI
 -- ============================================================
 function EventTrigger.Delivery.CloseAllUIs()
     if EventTrigger.Delivery._promptUI then EventTrigger.Delivery._promptUI:close() end
@@ -2805,17 +2804,17 @@ function EventTrigger.Delivery.CloseAllUIs()
 end
 
 -- ============================================================
--- UI Management: Edit / Delete / Reset / History for EventTriggerUI
+-- UI 管理：EventTriggerUI 的编辑 / 删除 / 重置 / 历史
 -- ============================================================
 
--- Delete a delivery point
+-- 删除交付点
 function EventTrigger.Delivery.DeleteDelivery(dlvIdx, dp)
     if not dp or not dp.id then return end
     sendClientCommand("EventTrigger", "deleteDeliveryPoint", { id = dp.id })
     if EventTrigger._ui then EventTrigger._ui:refreshList() end
 end
 
--- Reset delivery completion status
+-- 重置交付点完成状态
 function EventTrigger.Delivery.ResetDelivery(dlvIdx, dp)
     if not dp or not dp.id then return end
     dp.triggerCount = 0
@@ -2826,7 +2825,7 @@ function EventTrigger.Delivery.ResetDelivery(dlvIdx, dp)
     if EventTrigger._ui then EventTrigger._ui:refreshList() end
 end
 
--- Toggle delivery point enabled/disabled
+-- 切换交付点启用/禁用状态
 function EventTrigger.Delivery.ToggleDelivery(dlvIdx, dp)
     if not dp or not dp.id then return end
     local enabled = not (dp.enabled ~= false)
@@ -2835,13 +2834,13 @@ function EventTrigger.Delivery.ToggleDelivery(dlvIdx, dp)
     if EventTrigger._ui then EventTrigger._ui:refreshList() end
 end
 
--- Edit delivery point: re-open the setup wizard with existing values
+-- 编辑交付点：以已有值重新打开设置向导
 function EventTrigger.Delivery.EditDelivery(dlvIdx, dp)
     if not dp then return end
-    -- Close any existing selection UI
+    -- 关闭任何已有的选择 UI
     EventTrigger.Delivery.CloseAllUIs()
 
-    -- Restore branch config when editing a multi-branch point
+    -- 编辑多分支点时恢复分支配置
     local branches = dp.branches or {}
     local branchCount = #branches
     if branchCount < 1 then branchCount = 1 end
@@ -2850,13 +2849,13 @@ function EventTrigger.Delivery.EditDelivery(dlvIdx, dp)
         branchRewards[i] = EventTrigger.Delivery._cloneItems(b.rewards or {})
     end
 
-    -- Restore cost options (需求3) from the first branch so editing does not drop them.
+    -- 从首个分支恢复消耗选项（需求3），避免编辑时丢弃它们。
     local costOptions = {}
     if #branches > 0 then
         costOptions = EventTrigger.Delivery._cloneItems(branches[1].costOptions or {})
     end
 
-    -- Start edit wizard at delivery point position, pre-populated
+    -- 在交付点坐标处启动编辑向导，预填充已有值
     EventTrigger.Delivery._setupPending = {
         x = dp.x, y = dp.y, z = dp.z,
         hintText = dp.hintText,
@@ -2878,7 +2877,7 @@ function EventTrigger.Delivery.EditDelivery(dlvIdx, dp)
     EventTrigger.Delivery.PromptHintText()
 end
 
--- Show delivery history/details
+-- 显示交付历史/详情
 function EventTrigger.Delivery.ShowHistory(dp)
     if not dp then return end
     if EventTrigger.Delivery._histUI then
@@ -2890,7 +2889,7 @@ function EventTrigger.Delivery.ShowHistory(dp)
     EventTrigger.Delivery._histUI = ui
 end
 
--- Helper: clone items table (deep copy for edit mode)
+-- 辅助：克隆物品表（编辑模式的深拷贝）
 function EventTrigger.Delivery._cloneItems(items)
     local out = {}
     for _, item in ipairs(items or {}) do
@@ -2905,7 +2904,7 @@ function EventTrigger.Delivery._cloneItems(items)
 end
 
 -- ============================================================
--- Delivery History UI
+-- 交付历史 UI
 -- ============================================================
 EventTriggerDeliveryHistUI = ISPanel:derive("EventTriggerDeliveryHistUI")
 
@@ -2943,7 +2942,7 @@ function EventTriggerDeliveryHistUI:create()
     self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_RangeStatus", (dp.range or 3), statusStr), color = {1,1,1} }
     y = y + rowH
 
-    -- Match mode and cooldown
+    -- 匹配模式与冷却
     local modeStr = (dp.matchMode == "any") and getText("UI_ET_Dlv_Any") or getText("UI_ET_Dlv_All")
     local modeText = getText("UI_ET_Dlv_MatchModeLabel", modeStr)
     self.lines[#self.lines + 1] = { x = x, y = y, text = modeText, color = {0.9,0.9,0.3} }
@@ -2967,7 +2966,7 @@ function EventTriggerDeliveryHistUI:create()
 
     y = y + 6
 
-    -- Required items
+    -- 需求物品
     self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_RequiredItems"), color = {0.9,0.7,0.3} }
     y = y + rowH
     local reqItems = dp.requiredItems or {}
@@ -2998,7 +2997,7 @@ function EventTriggerDeliveryHistUI:create()
         end
     end
 
-    -- Trigger history
+    -- 触发历史
     y = y + 6
     local trigBy = dp.triggeredBy or {}
     self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_TotalDeliveries", #trigBy), color = {1,1,1} }
