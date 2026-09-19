@@ -3,6 +3,6 @@ id=EventTrigger
 description=Place trigger points on the ground. Configure delay and chat message. Trigger fires when player walks near the point.
 require=ElyonLib
 pzversion=42
-modversion=3.0
+modversion=3.5
 versionMin=42.19
 author=JexZucker
