@@ -584,23 +584,37 @@ function EventTrigger.Delivery.resolveView(delivery)
         return qualifyItems, {}, {}, (delivery.matchMode or "all")
     end
 
-    -- 扣除 = branch 选中的 costOption（需求3，可选）
+    -- 扣除 = branch 的消耗选项（costOptions）
+    --   costMode == "all" → 扣除全部消耗选项；
+    --   costMode == "any" → 扣除选中的那一个（未选则回退到第一个）。
     local costItems = {}
     local costOptions = branch.costOptions or {}
-    local chosen
-    local chosenIdx = delivery._selectedCostOptionIndex
-    if chosenIdx and costOptions[chosenIdx] then
-        chosen = costOptions[chosenIdx]
-    elseif #costOptions > 0 then
-        chosen = costOptions[1]
-    end
-    if chosen then
-        costItems[#costItems + 1] = {
-            fullType = chosen.fullType,
-            displayName = chosen.displayName,
-            customName = chosen.customName or "",
-            count = chosen.count,
-        }
+    local costMode = delivery.costMode or "all"
+    if costMode == "all" then
+        for _, co in ipairs(costOptions) do
+            costItems[#costItems + 1] = {
+                fullType = co.fullType,
+                displayName = co.displayName,
+                customName = co.customName or "",
+                count = co.count,
+            }
+        end
+    else
+        local chosen
+        local chosenIdx = delivery._selectedCostOptionIndex
+        if chosenIdx and costOptions[chosenIdx] then
+            chosen = costOptions[chosenIdx]
+        elseif #costOptions > 0 then
+            chosen = costOptions[1]
+        end
+        if chosen then
+            costItems[#costItems + 1] = {
+                fullType = chosen.fullType,
+                displayName = chosen.displayName,
+                customName = chosen.customName or "",
+                count = chosen.count,
+            }
+        end
     end
     return qualifyItems, costItems, (branch.rewards or {}), (delivery.matchMode or "all")
 end
@@ -639,12 +653,12 @@ function EventTrigger.Delivery.ShowDeliveryConfirm(player, delivery)
         delivery._selectedBranchId = branches[1].id
     end
 
-    -- 需求3：多个消耗选项 → 先选消耗选项。
-    -- 若已选过则跳过（避免重复弹出选择器）。
+    -- 需求3：消耗物品模式为 ANY 且有多个消耗选项 → 先选消耗选项。
+    -- ALL 模式不弹窗（全部扣除）；已选过则跳过。
     if #branches >= 1 then
         local branch = branches[delivery._selectedBranchId] or branches[1]
         local costOptions = branch and (branch.costOptions or {}) or {}
-        if #costOptions > 1 then
+        if (delivery.costMode or "all") ~= "all" and #costOptions > 1 then
             local chosenIdx = delivery._selectedCostOptionIndex
             if not chosenIdx or not costOptions[chosenIdx] then
                 EventTrigger.Delivery.ShowCostOptionSelect(player, delivery)
@@ -732,6 +746,9 @@ function EventTrigger.Delivery.FinalizeDelivery(player, delivery, batchCount)
     -- 客户端已选定要扣除的具体物品实例，服务器按 ID 扣除
     if costIds and #costIds > 0 then args.costIds = costIds end
     sendClientCommand("EventTrigger", "confirmDelivery", args)
+    -- ANY 消耗选项：交付后清除本次选择，让下次触发重新弹出选择器（每次都可选）。
+    -- 注意：不清理 _selectedBranchId（分支是交付点固定属性，玩家无需每次重选）。
+    delivery._selectedCostOptionIndex = nil
 end
 
 function EventTriggerDeliveryConfirm:onConfirm()
@@ -811,13 +828,22 @@ function EventTriggerDeliveryConfirm:prerender()
     local rowH = math.floor(20 * s)
     local y = self.itemY
 
-    -- 顶部信息：匹配模式（仅旧版）+ 冷却
+    -- 顶部信息：匹配模式（仅旧版）+ 消耗物品模式（有消耗物品时）+ 冷却
     local branches = delivery.branches or {}
     if #branches == 0 then
         local modeStr = (delivery.matchMode == "any") and getText("UI_ET_Dlv_Any") or getText("UI_ET_Dlv_All")
         local modeText = getText("UI_ET_Dlv_MatchModeLabel", modeStr)
         self:drawText(modeText, 16, y, 0.9, 0.9, 0.3, 1, UIFont.Small)
         y = y + rowH
+    elseif #branches >= 1 then
+        local b = branches[delivery._selectedBranchId] or branches[1]
+        local costOptions = b and (b.costOptions or {}) or {}
+        if #costOptions > 0 then
+            local costModeStr = (delivery.costMode or "all") == "all" and getText("UI_ET_Dlv_CostAll") or getText("UI_ET_Dlv_CostAny")
+            local costModeText = getText("UI_ET_Dlv_CostModeLabel", costModeStr)
+            self:drawText(costModeText, 16, y, 0.9, 0.9, 0.3, 1, UIFont.Small)
+            y = y + rowH
+        end
     end
 
     local cd = delivery.cooldown or {}
@@ -1281,7 +1307,9 @@ function EventTriggerBranchSelectPrompt:prerender()
     -- 消耗显示：多个 costOption 互斥（选其一）；
     -- 单个 costOption 是固定要求。标签需与实际语义一致。
     local costLabel
-    if #self.costOptions > 1 then
+    if (self.delivery.costMode or "all") == "all" then
+        costLabel = getText("UI_ET_Branch_CostAll")
+    elseif #self.costOptions > 1 then
         costLabel = getText("UI_ET_Branch_CostAlt")
     else
         costLabel = getText("UI_ET_Branch_Cost")
@@ -1857,6 +1885,7 @@ function EventTrigger.Delivery.StartSetup(x, y, z)
         requiredItems = {}, rewardItems = {},
         maxPlayers = -1, maxPerPlayer = -1,
         matchMode = "all",
+        costMode = "all",
         cooldown = { mode = EventTrigger.COOLDOWN_NONE },
         branchCount = 1,
         branchRewards = {},
@@ -1954,10 +1983,33 @@ function EventTrigger.Delivery.PromptMatchMode()
         p.matchMode or "all",
         function(value)
             p.matchMode = value
-            EventTrigger.Delivery.PromptCooldown()
+            EventTrigger.Delivery.PromptCostMode()
         end,
         function() EventTrigger.Delivery._setupPending = nil end,
         function() EventTrigger.Delivery.PromptMaxPerPlayer() end)
+    modal:initialise()
+    modal:addToUIManager()
+end
+
+-- 需求3：选择消耗物品匹配模式（all = 全部扣除 / any = 任选其一）。
+function EventTrigger.Delivery.PromptCostMode()
+    local p = EventTrigger.Delivery._setupPending
+    if not p then return end
+    local choices = {
+        { label = getText("UI_ET_Dlv_CostAll"), value = "all" },
+        { label = getText("UI_ET_Dlv_CostAny"), value = "any" },
+    }
+    local modal = EventTriggerChoicePrompt:new(
+        getText("UI_ET_Dlv_CostMode"),
+        getText("UI_ET_Dlv_CostModeHint"),
+        choices,
+        p.costMode or "all",
+        function(value)
+            p.costMode = value
+            EventTrigger.Delivery.PromptCooldown()
+        end,
+        function() EventTrigger.Delivery._setupPending = nil end,
+        function() EventTrigger.Delivery.PromptMatchMode() end)
     modal:initialise()
     modal:addToUIManager()
 end
@@ -1972,7 +2024,7 @@ function EventTrigger.Delivery.PromptCooldown()
             EventTrigger.Delivery.PromptBranchCount()
         end,
         function() EventTrigger.Delivery._setupPending = nil end,
-        function() EventTrigger.Delivery.PromptMatchMode() end)
+        function() EventTrigger.Delivery.PromptCostMode() end)
     modal:initialise()
     modal:addToUIManager()
 end
@@ -1988,8 +2040,12 @@ function EventTrigger.Delivery.PromptBranchCount()
         function(num)
             if num < 1 then num = 1 end
             if num > 10 then num = 10 end
+            -- 仅当分支数量真正变化时才清空分支奖励：
+            -- 编辑时数量未变，应保留已恢复的各分支奖励，避免要求玩家重新设定。
+            if (p.branchCount or 1) ~= num then
+                p.branchRewards = {}
+            end
             p.branchCount = num
-            p.branchRewards = {}
             p._currentBranchIdx = 1
             EventTrigger.Delivery.PromptRequiredItems()
         end,
@@ -2681,6 +2737,7 @@ function EventTrigger.Delivery.PlacePending()
         maxPlayers = p.maxPlayers or -1,
         maxPerPlayer = p.maxPerPlayer or -1,
         matchMode = p.matchMode or "all",
+        costMode = p.costMode or "all",
         cooldown = p.cooldown or { mode = EventTrigger.COOLDOWN_NONE },
         requiredItems = p.requiredItems or {},
         rewardItems = p.rewardItems or {},
@@ -2691,7 +2748,7 @@ function EventTrigger.Delivery.PlacePending()
     dbg("PlacePending: placing delivery at (", p.x, p.y, p.z, "), hint=", p.hintText,
         " reqItems=", #args.requiredItems, " rewardItems=", #args.rewardItems,
         " branches=", #args.branches,
-        " matchMode=", args.matchMode, " cooldown=", EventTrigger.formatCooldown(args.cooldown),
+        " matchMode=", args.matchMode, " costMode=", args.costMode, " cooldown=", EventTrigger.formatCooldown(args.cooldown),
         " editing=", tostring(isEditing))
 
     if isEditing then
@@ -2704,6 +2761,7 @@ function EventTrigger.Delivery.PlacePending()
             dp.maxPlayers = p.maxPlayers or -1
             dp.maxPerPlayer = p.maxPerPlayer or -1
             dp.matchMode = p.matchMode or "all"
+            dp.costMode = p.costMode or "all"
             dp.cooldown = EventTrigger.makeCooldown(p.cooldown or { mode = EventTrigger.COOLDOWN_NONE })
             dp.requiredItems = p.requiredItems or {}
             dp.rewardItems = p.rewardItems or {}
@@ -2727,6 +2785,7 @@ function EventTrigger.Delivery.PlacePending()
         maxPlayers = p.maxPlayers or -1,
         maxPerPlayer = p.maxPerPlayer or -1,
         matchMode = p.matchMode or "all",
+        costMode = p.costMode or "all",
         cooldown = EventTrigger.makeCooldown(p.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
         requiredItems = p.requiredItems or {},
         rewardItems = p.rewardItems or {},
@@ -2837,6 +2896,7 @@ function EventTrigger.Delivery.EditDelivery(dlvIdx, dp)
         maxPlayers = dp.maxPlayers or -1,
         maxPerPlayer = dp.maxPerPlayer or -1,
         matchMode = dp.matchMode or "all",
+        costMode = dp.costMode or "all",
         cooldown = EventTrigger.makeCooldown(dp.cooldown or { mode = EventTrigger.COOLDOWN_NONE }),
         requiredItems = EventTrigger.Delivery._cloneItems(dp.requiredItems or {}),
         rewardItems = EventTrigger.Delivery._cloneItems(dp.rewardItems or {}),

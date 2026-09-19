@@ -410,6 +410,7 @@ Server.onClientCommand = function(module, command, player, args)
             requiredItems = args.requiredItems or {},
             rewardItems   = args.rewardItems or {},
             matchMode     = args.matchMode or "all",
+            costMode      = args.costMode or "all",
             branches      = args.branches or {},
             cooldown      = args.cooldown,
             playerDeliveries = {},   -- 每个玩家的累计交付次数
@@ -481,6 +482,7 @@ Server.onClientCommand = function(module, command, player, args)
                 if args.rewardItems ~= nil then dp.rewardItems = args.rewardItems end
                 if args.branches ~= nil then dp.branches = args.branches end
                 if args.matchMode ~= nil then dp.matchMode = args.matchMode end
+                if args.costMode ~= nil then dp.costMode = args.costMode end
                 if args.cooldown ~= nil then dp.cooldown = Shared.makeCooldown(args.cooldown) end
                 Persistence.saveOneDeliveryPoint(dp)
                 Logger:info("Delivery edited: id=%s by %s", dp.id, pid)

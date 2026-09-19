@@ -299,6 +299,7 @@ EventTriggerShared.makeDeliveryPoint = function(args)
         requiredItems = args.requiredItems or {},
         rewardItems   = args.rewardItems or {},
         matchMode     = args.matchMode or "all",  -- "all" = AND 逻辑，"any" = OR 逻辑
+        costMode      = args.costMode or "all",   -- 消耗物品模式："all" = 全部扣除（默认）/ "any" = 任选其一
         branches      = args.branches or {},      -- 多兑换分支（为空则回退旧字段）
         maxPlayers    = math.max(-1, args.maxPlayers or -1),
         maxPerPlayer  = math.max(-1, args.maxPerPlayer or -1),
@@ -362,18 +363,37 @@ EventTriggerShared.resolveExchange = function(dp, branchId, costOptionIndex)
         return qualifyItems, nil, nil, "Branch unavailable"
     end
 
-    -- 分支内部：需求物品永不扣除，扣除仅来自选中的消耗选项（需求3，可选）
+    -- 分支内部：需求物品永不扣除，扣除来自消耗选项（costOptions）。
+    --   costMode == "all" → 扣除全部消耗选项；
+    --   costMode == "any" → 扣除选中的那一个（未选则回退到第一个）。
     local costs = {}
 
     local costOptions = branch.costOptions or {}
-    local chosen
-    if costOptionIndex and costOptions[costOptionIndex] then
-        chosen = costOptions[costOptionIndex]
-    elseif #costOptions > 0 then
-        chosen = costOptions[1]
-    end
-    if chosen then
-        costs[#costs + 1] = chosen
+    local costMode = dp.costMode or "all"
+    if costMode == "all" then
+        for _, co in ipairs(costOptions) do
+            costs[#costs + 1] = {
+                fullType = co.fullType,
+                displayName = co.displayName,
+                customName = co.customName or "",
+                count = co.count,
+            }
+        end
+    else
+        local chosen
+        if costOptionIndex and costOptions[costOptionIndex] then
+            chosen = costOptions[costOptionIndex]
+        elseif #costOptions > 0 then
+            chosen = costOptions[1]
+        end
+        if chosen then
+            costs[#costs + 1] = {
+                fullType = chosen.fullType,
+                displayName = chosen.displayName,
+                customName = chosen.customName or "",
+                count = chosen.count,
+            }
+        end
     end
 
     return qualifyItems, costs, branch.rewards or {}, nil
