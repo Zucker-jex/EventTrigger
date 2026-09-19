@@ -6,14 +6,16 @@
     "UI_ET_Out_Yell": "/yell",
     "UI_ET_Out_Ooc": "/ooc",
     "UI_ET_Out_Halo": "头顶文字",
+    "UI_ET_Out_Broadcast": "服务器广播",
 
-    "UI_ET_Out_Named_Desc": "命名（系统频道）",
+    "UI_ET_Out_Named_Desc": "命名（仅本地显示）",
     "UI_ET_Out_Say_Desc": "/say（带气泡）",
     "UI_ET_Out_Do_Desc": "/do（叙述）",
     "UI_ET_Out_Low_Desc": "/low（低语）",
     "UI_ET_Out_Yell_Desc": "/yell（喊叫）",
     "UI_ET_Out_Ooc_Desc": "/ooc（全局）",
-    "UI_ET_Out_Halo_Desc": "头顶文字（光环）",
+    "UI_ET_Out_Halo_Desc": "头顶文字（仅本地显示）",
+    "UI_ET_Out_Broadcast_Desc": "服务器广播（可命名）",
 
     "UI_ET_Ctx_PlaceTrigger": "放置触发器",
     "UI_ET_Ctx_SetDelivery": "设置配送点",

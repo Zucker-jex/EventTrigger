@@ -210,13 +210,14 @@ end
 
 -- 触发器消息输出模式枚举（对应 MongooseChat 频道）
 EventTrigger.OutputType = {
-    NAMED = 1,  -- 具名 + 系统频道（蓝色）
-    SAY   = 2,  -- /say  触发者身份 + 气泡
-    DO    = 3,  -- /do   环境旁白
-    LOW   = 4,  -- /low  低语 + 气泡
-    YELL  = 5,  -- /yell 大喊 + 气泡
-    OOC   = 6,  -- /ooc  全局 OOC
-    HALO  = 7,  -- 头顶漂浮文字（不写入聊天日志）
+    NAMED     = 1,  -- 具名系统频道（仅本地显示）
+    SAY       = 2,  -- /say  触发者身份 + 气泡
+    DO        = 3,  -- /do   环境旁白
+    LOW       = 4,  -- /low  低语 + 气泡
+    YELL      = 5,  -- /yell 大喊 + 气泡
+    OOC       = 6,  -- /ooc  全局 OOC
+    HALO      = 7,  -- 头顶漂浮文字（仅本地显示，不写入聊天日志）
+    BROADCAST = 8,  -- 服务器广播（全服可见，可具名）
 }
 
 -- 输出类型名称查找表（用于 UI 显示）
@@ -228,6 +229,7 @@ local OutputTypeNames = {
     [5] = getText("UI_ET_Out_Yell"),
     [6] = getText("UI_ET_Out_Ooc"),
     [7] = getText("UI_ET_Out_Halo"),
+    [8] = getText("UI_ET_Out_Broadcast"),
 }
 
 -- 获取稳定的玩家标识（优先 Steam 用户名，回退为 "unknown"）
@@ -1120,20 +1122,51 @@ local function CreateChatMessage(text, author)
 end
 
 -- 显示触发器消息
--- 联机：语音频道走 MongooseChat 服务器管线，NAMED 走 EventTrigger 服务器广播
--- 单机：直接调用 MC_ChatPanel + MC_Bubble
+-- NAMED / HALO：仅本地显示；BROADCAST：服务器广播；语音频道：MongooseChat 服务器管线
 local function ShowChatMessage(msg, triggerPlayer, outputType, outputName)
     local player = triggerPlayer or getPlayer()
     if not player then return end
     local ot = outputType or EventTrigger.OutputType.HALO
+    local cfg = EventTrigger.GetConfig()
 
+    -- HALO：头顶漂浮文字（仅本地显示）
     if ot == EventTrigger.OutputType.HALO then
         HaloTextHelper.addGoodText(player, msg)
         return
     end
 
+    -- NAMED：具名系统频道（仅本地显示）
+    if ot == EventTrigger.OutputType.NAMED then
+        local author = outputName
+        if not author or #author == 0 then author = cfg.outputName end
+        local mcPanel = GetMongooseChatPanel()
+        if mcPanel then
+            mcPanel.addMessage({
+                channel = "system",
+                message = msg,
+                timestamp = os.time(),
+                characterName = author,
+                username = "EventTrigger",
+            })
+        elseif ISChat.instance then
+            local chatMsg = CreateChatMessage(msg, author)
+            if chatMsg then ISChat.addLineInChat(chatMsg, 0) end
+        else
+            HaloTextHelper.addGoodText(player, msg)
+        end
+        return
+    end
+
+    -- BROADCAST：服务器广播（全服可见，可具名）
+    if ot == EventTrigger.OutputType.BROADCAST then
+        sendClientCommand("EventTrigger", "namedMessage", {
+            message = msg,
+            outputName = outputName,
+        })
+        return
+    end
+
     local CHANNEL_MAP = {
-        [EventTrigger.OutputType.NAMED] = { mc = "system", bubble = false },
         [EventTrigger.OutputType.SAY]   = { mc = "say",    bubble = true  },
         [EventTrigger.OutputType.DO]    = { mc = "do",     bubble = false },
         [EventTrigger.OutputType.LOW]   = { mc = "low",    bubble = true  },
@@ -1145,37 +1178,16 @@ local function ShowChatMessage(msg, triggerPlayer, outputType, outputName)
     if not ch then return end
 
     -- ================================================================
-    -- 联机路径：服务器管线，对范围内所有玩家可见
+    -- 联机路径：语音频道走 MongooseChat 服务器管线（范围内所有玩家可见）
     -- ================================================================
     if EventTrigger.IsMultiplayer() then
-        if ot == EventTrigger.OutputType.NAMED then
-            -- NAMED：本地立即显示 + EventTrigger 服务器广播给所有客户端
-            local mcPanel = GetMongooseChatPanel()
-            if mcPanel then
-                local cfg = EventTrigger.GetConfig()
-                local author = outputName
-                if not author or #author == 0 then author = cfg.outputName end
-                mcPanel.addMessage({
-                    channel = "system",
-                    message = msg,
-                    timestamp = os.time(),
-                    characterName = author,
-                    username = "EventTrigger",
-                })
-            end
-            sendClientCommand("EventTrigger", "namedMessage", {
-                message = msg,
-                outputName = outputName,
-            })
-        else
-            -- SAY/LOW/YELL/DO/OOC：伪装成玩家聊天，由 MC 服务器负责范围计算与广播
-            -- 所有范围内客户端会自动收到面板 + 气泡（通过 MC_Client.onChatMessage）
-            sendClientCommand("MongooseChat", "ChatMessage", {
-                channel = ch.mc,
-                message = msg,
-                radioEmitters = {},
-            })
-        end
+        -- SAY/LOW/YELL/DO/OOC：伪装成玩家聊天，由 MC 服务器负责范围计算与广播
+        -- 所有范围内客户端会自动收到面板 + 气泡（通过 MC_Client.onChatMessage）
+        sendClientCommand("MongooseChat", "ChatMessage", {
+            channel = ch.mc,
+            message = msg,
+            radioEmitters = {},
+        })
         return
     end
 
@@ -1185,26 +1197,18 @@ local function ShowChatMessage(msg, triggerPlayer, outputType, outputName)
     local mcPanel = GetMongooseChatPanel()
     if mcPanel then
         local mcData = { message = msg, timestamp = os.time(), channel = ch.mc }
-        if ot == EventTrigger.OutputType.NAMED then
-            local cfg = EventTrigger.GetConfig()
-            local author = outputName
-            if not author or #author == 0 then author = cfg.outputName end
-            mcData.characterName = author
-            mcData.username = "EventTrigger"
-        else
-            local desc = triggerPlayer and triggerPlayer:getDescriptor()
-            local charName = "Player"
-            if desc then
-                local f = desc:getForename()
-                local s = desc:getSurname()
-                if f and #f > 0 then
-                    charName = f
-                    if s and #s > 0 then charName = charName .. " " .. s end
-                end
+        local desc = triggerPlayer and triggerPlayer:getDescriptor()
+        local charName = "Player"
+        if desc then
+            local f = desc:getForename()
+            local s = desc:getSurname()
+            if f and #f > 0 then
+                charName = f
+                if s and #s > 0 then charName = charName .. " " .. s end
             end
-            mcData.characterName = charName
-            mcData.username = GetPlayerIdentifier(triggerPlayer) or charName
         end
+        mcData.characterName = charName
+        mcData.username = GetPlayerIdentifier(triggerPlayer) or charName
         mcPanel.addMessage(mcData)
         if ch.bubble then
             ShowMCBubble(ch.mc, triggerPlayer, mcData.message)
@@ -1219,15 +1223,7 @@ local function ShowChatMessage(msg, triggerPlayer, outputType, outputName)
     end
 
     local ok, err = pcall(function()
-        local chatMsg
-        if ot == EventTrigger.OutputType.NAMED then
-            local cfg = EventTrigger.GetConfig()
-            local author = outputName
-            if not author or #author == 0 then author = cfg.outputName end
-            chatMsg = CreateChatMessage(msg, author)
-        else
-            chatMsg = CreateChatMessage(msg, GetPlayerName(triggerPlayer))
-        end
+        local chatMsg = CreateChatMessage(msg, GetPlayerName(triggerPlayer))
         if chatMsg then
             ISChat.addLineInChat(chatMsg, 0)
         end
@@ -2043,6 +2039,7 @@ EventTrigger.OUTPUT_CHOICES = {
     { label = getText("UI_ET_Out_Yell_Desc"), value = EventTrigger.OutputType.YELL },
     { label = getText("UI_ET_Out_Ooc_Desc"),  value = EventTrigger.OutputType.OOC },
     { label = getText("UI_ET_Out_Halo_Desc"), value = EventTrigger.OutputType.HALO },
+    { label = getText("UI_ET_Out_Broadcast_Desc"), value = EventTrigger.OutputType.BROADCAST },
 }
 
 function EventTrigger.PromptDelayRange(x, y, z)
@@ -2142,7 +2139,7 @@ function EventTrigger.PromptOutput2()
         p.outputType or EventTrigger.OutputType.SAY,
         function(value)
             p.outputType = value
-            if value == EventTrigger.OutputType.NAMED then
+            if value == EventTrigger.OutputType.NAMED or value == EventTrigger.OutputType.BROADCAST then
                 EventTrigger.PromptOutputName2()
             else
                 EventTrigger.PromptCooldown2()
@@ -2185,7 +2182,7 @@ function EventTrigger.PromptCooldown2()
         end,
         function() EventTrigger._pending = nil end,
         function()
-            if p.outputType == EventTrigger.OutputType.NAMED then
+            if p.outputType == EventTrigger.OutputType.NAMED or p.outputType == EventTrigger.OutputType.BROADCAST then
                 EventTrigger.PromptOutputName2()
             else
                 EventTrigger.PromptOutput2()
@@ -2345,7 +2342,7 @@ function EventTrigger.PromptEditOutput()
         ot,
         function(value)
             EventTrigger.SendCommand("editTriggerOutput", { index = idx, id = t.id, outputType = value })
-            if value == EventTrigger.OutputType.NAMED then
+            if value == EventTrigger.OutputType.NAMED or value == EventTrigger.OutputType.BROADCAST then
                 EventTrigger.PromptEditOutputName()
             else
                 EventTrigger.PromptEditCooldown()
@@ -2396,7 +2393,7 @@ function EventTrigger.PromptEditCooldown()
         end,
         nil,
         function()
-            if t.outputType == EventTrigger.OutputType.NAMED then
+            if t.outputType == EventTrigger.OutputType.NAMED or t.outputType == EventTrigger.OutputType.BROADCAST then
                 EventTrigger.PromptEditOutputName()
             else
                 EventTrigger.PromptEditOutput()

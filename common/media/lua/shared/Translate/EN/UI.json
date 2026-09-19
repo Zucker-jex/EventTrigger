@@ -6,14 +6,16 @@
     "UI_ET_Out_Yell": "/yell",
     "UI_ET_Out_Ooc": "/ooc",
     "UI_ET_Out_Halo": "Above Head",
+    "UI_ET_Out_Broadcast": "Broadcast",
 
-    "UI_ET_Out_Named_Desc": "Named (system channel)",
+    "UI_ET_Out_Named_Desc": "Named (local only)",
     "UI_ET_Out_Say_Desc": "/say (with bubble)",
     "UI_ET_Out_Do_Desc": "/do (narration)",
     "UI_ET_Out_Low_Desc": "/low (whisper)",
     "UI_ET_Out_Yell_Desc": "/yell (shout)",
     "UI_ET_Out_Ooc_Desc": "/ooc (global)",
-    "UI_ET_Out_Halo_Desc": "Above Head (halo)",
+    "UI_ET_Out_Halo_Desc": "Above Head (local only)",
+    "UI_ET_Out_Broadcast_Desc": "Server Broadcast (named)",
 
     "UI_ET_Ctx_PlaceTrigger": "Place Trigger",
     "UI_ET_Ctx_SetDelivery": "Set Delivery Point",
