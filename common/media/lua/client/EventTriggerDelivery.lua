@@ -41,24 +41,88 @@ local function playerKeyOf(player)
     return tostring(player:getOnlineID()) or ""
 end
 
--- 双重匹配的匹配键（FullType + DisplayName）。DisplayName 分量
--- 用于区分玩家通过 setName() 重命名的物品；在客户端精确比较
---（严格预检）。服务器端仅按 FullType 执行（宽松权威，不受
--- 各玩家翻译差异影响）。
-local function itemKey(fullType, displayName)
-    return tostring(fullType or "") .. "|" .. tostring(displayName or "")
+-- 匹配键 = FullType（语言无关的稳定脚本标识）。
+-- displayName 是运行时翻译名，且会被 setName 覆盖，不能用于跨端匹配。
+local function itemKey(fullType)
+    return tostring(fullType or "")
+end
+
+-- 物品是否匹配配置条目（比较脚本标识 fullType）
+local function matchesItem(item, cfg)
+    if not item or not cfg then return false end
+    return item:getFullType() == cfg.fullType
 end
 
 -- ============================================================
--- 第 1 节：双重匹配算法（FullType + DisplayName）
+-- 深度遍历容器中所有物品（含嵌套背包），对每个物品调用 fn
+-- 注意：getInventory() 只存在于 InventoryContainer（背包），
+-- 对普通物品调用会抛 Java 异常，必须先用 IsInventoryContainer 判断。
 -- ============================================================
-function EventTrigger.Delivery.MatchItem(item, fullType, displayName)
-    if not item then return false end
-    return item:getFullType() == fullType and item:getDisplayName() == displayName
+local function forEachItemDeep(container, fn, depth)
+    depth = depth or 0
+    if not container or depth > 4 then return end
+    local ok, items = pcall(function() return container:getItems() end)
+    if not ok or not items then return end
+    for i = 0, items:size() - 1 do
+        local it = items:get(i)
+        if it then
+            fn(it)
+            local isBag = false
+            pcall(function() isBag = it:IsInventoryContainer() == true end)
+            if isBag then
+                local sub = nil
+                pcall(function() sub = it:getInventory() end)
+                if sub then forEachItemDeep(sub, fn, depth + 1) end
+            end
+        end
+    end
 end
 
 -- ============================================================
--- 统计玩家背包中匹配的物品数量（FullType + DisplayName）
+-- 解析本次交换实际要扣除的「物品实例」，返回实例 ID 列表。
+-- 客户端负责挑选具体实例，把 ID 列表发给服务器，服务器按 ID 扣除 ——
+-- 无需再做匹配，从根本上杜绝"扣错同 fullType 的另一实例"。
+-- 返回 ids（数组）或 nil + 错误消息。
+-- ============================================================
+function EventTrigger.Delivery.ResolveCostInstances(inventory, costItems, batchCount)
+    batchCount = tonumber(batchCount) or 1
+    if batchCount < 1 then batchCount = 1 end
+
+    -- 快照当前背包内全部物品实例（含嵌套背包）
+    local all = {}
+    forEachItemDeep(inventory, function(it) all[#all + 1] = it end)
+
+    local taken = {}   -- 已选实例 ID，避免多条 cost 重复选同一实例
+    local ids = {}
+
+    for _, cost in ipairs(costItems) do
+        local need = (cost.count or 1) * batchCount
+        for _, it in ipairs(all) do
+            if need <= 0 then break end
+            local iid = nil
+            pcall(function() iid = it:getID() end)
+            if iid and not taken[iid] and matchesItem(it, cost) then
+                taken[iid] = true
+                ids[#ids + 1] = iid
+                need = need - 1
+            end
+        end
+        if need > 0 then
+            return nil, getText("UI_ET_Msg_MissingItems")
+        end
+    end
+    return ids
+end
+
+-- ============================================================
+-- 第 1 节：匹配算法（FullType）
+-- ============================================================
+function EventTrigger.Delivery.MatchItem(item, fullType)
+    return matchesItem(item, { fullType = fullType })
+end
+
+-- ============================================================
+-- 统计玩家背包中匹配的物品数量（FullType）
 -- ============================================================
 function EventTrigger.Delivery.CountItems(inventory, requiredItems)
     local counts = {}
@@ -67,8 +131,8 @@ function EventTrigger.Delivery.CountItems(inventory, requiredItems)
         local item = items:get(i)
         if item then
             for _, req in ipairs(requiredItems) do
-                if item:getFullType() == req.fullType and item:getDisplayName() == req.displayName then
-                    local key = itemKey(req.fullType, req.displayName)
+                if matchesItem(item, req) then
+                    local key = itemKey(req.fullType)
                     counts[key] = (counts[key] or 0) + 1
                 end
             end
@@ -102,7 +166,7 @@ function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, 
                 for i = items:size() - 1, 0, -1 do
                     if remaining <= 0 then break end
                     local item = items:get(i)
-                    if item and item:getFullType() == req.fullType and item:getDisplayName() == req.displayName then
+                    if matchesItem(item, req) then
                         toRemoveList[#toRemoveList + 1] = item
                         remaining = remaining - 1
                     end
@@ -118,7 +182,7 @@ function EventTrigger.Delivery.RemoveItems(inventory, requiredItems, matchMode, 
                 for i = items:size() - 1, 0, -1 do
                     if remaining <= 0 then break end
                     local item = items:get(i)
-                    if item and item:getFullType() == req.fullType and item:getDisplayName() == req.displayName then
+                    if matchesItem(item, req) then
                         toRemoveList[#toRemoveList + 1] = item
                         remaining = remaining - 1
                     end
@@ -151,8 +215,11 @@ function EventTrigger.Delivery.GrantRewards(inventory, rewardItems, multiplier)
         for _ = 1, reward.count * multiplier do
             local instance = inventory:AddItem(reward.fullType)
             if instance then
-                if reward.displayName and #reward.displayName > 0 then
-                    instance:setName(reward.displayName)
+                local want = reward.displayName or ""
+                -- 仅当请求的名字确实不同于物品默认名时才改名，
+                -- 避免把普通奖励误标为自定义命名。
+                if #want > 0 and want ~= instance:getDisplayName() then
+                    instance:setName(want)
                 end
                 table.insert(created, instance)
             else
@@ -168,7 +235,10 @@ function EventTrigger.Delivery.GrantRewards(inventory, rewardItems, multiplier)
 end
 
 -- ============================================================
--- 客户端双重匹配校验（不修改背包）
+-- 客户端校验（不修改背包）。
+-- 返回值：(ok, msg, costIds)
+--   costIds = 本次应扣除的「物品实例 ID 列表」（客户端选定），随
+--   confirmDelivery 发给服务器，服务器按 ID 扣除。
 -- ============================================================
 function EventTrigger.Delivery.Validate(player, deliveryData)
     if not player or not deliveryData then return false, getText("UI_ET_Msg_InvalidData") end
@@ -186,7 +256,7 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
             local hasAny = false
             for _, q in ipairs(qualifyItems) do
                 local need = q.collect and (q.count * batchCount) or q.count
-                if (qualCounts[itemKey(q.fullType, q.displayName)] or 0) >= need then
+                if (qualCounts[itemKey(q.fullType)] or 0) >= need then
                     hasAny = true
                     break
                 end
@@ -195,21 +265,21 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
         else
             for _, q in ipairs(qualifyItems) do
                 local need = q.collect and (q.count * batchCount) or q.count
-                if (qualCounts[itemKey(q.fullType, q.displayName)] or 0) < need then
+                if (qualCounts[itemKey(q.fullType)] or 0) < need then
                     return false, getText("UI_ET_Msg_MissingItems")
                 end
             end
         end
     end
 
-    -- 消耗检查（实际扣款）
+    -- 消耗：客户端选定具体实例，返回 ID 列表
+    local costIds = {}
     if #costItems > 0 then
-        local costCounts = EventTrigger.Delivery.CountItems(inventory, costItems)
-        for _, c in ipairs(costItems) do
-            if (costCounts[itemKey(c.fullType, c.displayName)] or 0) < c.count * batchCount then
-                return false, getText("UI_ET_Msg_MissingItems")
-            end
+        local ids, err = EventTrigger.Delivery.ResolveCostInstances(inventory, costItems, batchCount)
+        if not ids then
+            return false, err or getText("UI_ET_Msg_MissingItems")
         end
+        costIds = ids
     end
 
     -- 检查冷却
@@ -218,7 +288,7 @@ function EventTrigger.Delivery.Validate(player, deliveryData)
         return false, cooldownMsg
     end
 
-    return true, ""
+    return true, "", costIds
 end
 
 -- ============================================================
@@ -451,15 +521,15 @@ function EventTriggerDeliveryPrompt:prerender()
         if matchMode == "any" then
             qualifyOk = false
             for _, req in ipairs(reqItems) do
-                if (counts[itemKey(req.fullType, req.displayName)] or 0) >= (req.count or 1) then qualifyOk = true; break end
+                if (counts[itemKey(req.fullType)] or 0) >= (req.count or 1) then qualifyOk = true; break end
             end
         else
             for _, req in ipairs(reqItems) do
-                if (counts[itemKey(req.fullType, req.displayName)] or 0) < (req.count or 1) then qualifyOk = false; break end
+                if (counts[itemKey(req.fullType)] or 0) < (req.count or 1) then qualifyOk = false; break end
             end
         end
         for _, req in ipairs(reqItems) do
-            local have = counts[itemKey(req.fullType, req.displayName)] or 0
+            local have = counts[itemKey(req.fullType)] or 0
             local suffix = (req.collect ~= false) and getText("UI_ET_Dlv_CollectSuffix") or getText("UI_ET_Dlv_CheckOnlySuffix")
             local txt = fitText((req.displayName or "?") .. "  x" .. tostring(req.count) .. suffix .. "  [" .. getText("UI_ET_Batch_Have") .. " " .. have .. "]", UIFont.Small, self.width - 48)
             self:drawText(txt, 24, y, 1, 1, 1, 1, UIFont.Small)
@@ -720,7 +790,7 @@ function EventTrigger.Delivery.FinalizeDelivery(player, delivery, batchCount)
 
     delivery._batchCount = batchCount
 
-    local ok, msg = EventTrigger.Delivery.Validate(player, delivery)
+    local ok, msg, costIds = EventTrigger.Delivery.Validate(player, delivery)
     if not ok then
         HaloTextHelper.addBadText(player, msg)
         return
@@ -729,6 +799,8 @@ function EventTrigger.Delivery.FinalizeDelivery(player, delivery, batchCount)
     if selectedORIndex then args.selectedORIndex = selectedORIndex end
     if delivery._selectedBranchId then args.branchId = delivery._selectedBranchId end
     if delivery._selectedCostOptionIndex then args.costOptionIndex = delivery._selectedCostOptionIndex end
+    -- 客户端已选定要扣除的具体物品实例，服务器按 ID 扣除
+    if costIds and #costIds > 0 then args.costIds = costIds end
     sendClientCommand("EventTrigger", "confirmDelivery", args)
 end
 
@@ -925,7 +997,7 @@ function EventTriggerBatchCountPrompt:computeCosts()
     self.rewardItems = rewardItems
     local counts = EventTrigger.Delivery.CountItems(inv, costItems)
     for _, req in ipairs(costItems) do
-        local have = counts[itemKey(req.fullType, req.displayName)] or 0
+        local have = counts[itemKey(req.fullType)] or 0
         local maxForThis = math.floor(have / (req.count or 1))
         if self.maxN == nil or maxForThis < self.maxN then
             self.maxN = maxForThis
@@ -1399,7 +1471,7 @@ function EventTriggerCostOptionSelectPrompt:create()
     if inv then
         local counts = EventTrigger.Delivery.CountItems(inv, self.costOptions)
         for idx, co in ipairs(self.costOptions) do
-            local have = counts[itemKey(co.fullType, co.displayName)] or 0
+            local have = counts[itemKey(co.fullType)] or 0
             if have > 0 then
                 self.ownedOptions[#self.ownedOptions + 1] = {
                     idx = idx,
@@ -1652,7 +1724,7 @@ function EventTriggerDeliveryItemSelectOR:findMatchingItems()
         if req.collect ~= false then
             for i = 0, items:size() - 1 do
                 local item = items:get(i)
-                if item and item:getFullType() == req.fullType and item:getDisplayName() == req.displayName then
+                if item and matchesItem(item, req) then
                     table.insert(self.matchingItems, {
                         req = req,
                         item = item,
@@ -1679,15 +1751,18 @@ function EventTriggerDeliveryItemSelectOR:onConfirm()
     end
     self:close()
     
-    -- 保存选中的物品索引供 Execute 使用
+    -- 保存选中的物品索引（供 OR 语义解析使用）
     self.delivery._selectedORItemIndex = self.selectedItemIndex
-    
-    local ok, msg = EventTrigger.Delivery.Validate(player, self.delivery)
+    self.delivery._batchCount = 1
+
+    local ok, msg, costIds = EventTrigger.Delivery.Validate(player, self.delivery)
     if not ok then
         HaloTextHelper.addBadText(player, msg)
         return
     end
-    sendClientCommand("EventTrigger", "confirmDelivery", { id = self.delivery.id, selectedORIndex = self.selectedItemIndex })
+    local args = { id = self.delivery.id, selectedORIndex = self.selectedItemIndex }
+    if costIds and #costIds > 0 then args.costIds = costIds end
+    sendClientCommand("EventTrigger", "confirmDelivery", args)
 end
 
 function EventTriggerDeliveryItemSelectOR:onCancel()
@@ -2115,7 +2190,7 @@ function EventTriggerDeliveryItemSelect:clearSelected()
     self.selectedChildren = {}
 end
 
--- 收集背包数据（按 FullType+DisplayName 去重）
+-- 收集背包数据（按 FullType 去重）
 function EventTriggerDeliveryItemSelect:buildItemData()
     self.inventoryData = {}
     local player = getPlayer()
@@ -2126,7 +2201,7 @@ function EventTriggerDeliveryItemSelect:buildItemData()
     local seen = {}
     for i = 0, items:size() - 1 do
         local item = items:get(i)
-        local key = itemKey(item:getFullType(), item:getDisplayName())
+        local key = itemKey(item:getFullType())
         if not seen[key] then
             seen[key] = true
             table.insert(self.inventoryData, {
@@ -2190,7 +2265,7 @@ function EventTriggerDeliveryItemSelect:updateLeftPanel()
         local found = false
         if itemList then
             for _, si in ipairs(itemList) do
-                if si.fullType == data.fullType and si.displayName == data.displayName then found = true; break end
+                if si.fullType == data.fullType then found = true; break end
             end
         end
 
@@ -2436,7 +2511,7 @@ function EventTriggerDeliveryItemSelect:onQtyItem(btn)
     local itemList = setupItemList(p, mode)
 
     for idx, si in ipairs(itemList) do
-        if si.fullType == btn.itemFullType and si.displayName == btn.itemDisplayName then
+        if si.fullType == btn.itemFullType then
             EventTrigger.Delivery.PromptItemQuantity(idx, mode, self)
             return
         end
@@ -2451,7 +2526,7 @@ function EventTriggerDeliveryItemSelect:onRemoveItem(btn)
     local itemList = setupItemList(p, mode)
 
     for idx = #itemList, 1, -1 do
-        if itemList[idx].fullType == btn.itemFullType and itemList[idx].displayName == btn.itemDisplayName then
+        if itemList[idx].fullType == btn.itemFullType then
             table.remove(itemList, idx)
             break
         end

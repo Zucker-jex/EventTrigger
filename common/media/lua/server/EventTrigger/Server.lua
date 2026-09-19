@@ -587,11 +587,11 @@ Server.onClientCommand = function(module, command, player, args)
             end
         end
 
-        -- 批量次数 N：正整数，默认 1，上限 1000 防刷
+        -- 批量次数 N：正整数，默认 1，上限 20 防刷
         local batchCount = tonumber(args.batchCount) or 1
         batchCount = math.floor(batchCount)
         if batchCount < 1 then batchCount = 1 end
-        if batchCount > 1000 then batchCount = 1000 end
+        if batchCount > 20 then batchCount = 20 end
 
         -- 冷却校验（在触碰背包之前先判断，避免误扣物品）
         if not Shared.isCooldownZero(cooldown) then
@@ -632,22 +632,51 @@ Server.onClientCommand = function(module, command, player, args)
             end
         end
 
-        local items = inv:getItems()
-        -- 判断背包物品是否匹配目标消耗项
+        -- 深度遍历玩家所有容器（含嵌套背包）
+        -- 注意：getInventory() 只存在于 InventoryContainer，需先 IsInventoryContainer 判断
+        local function forEachItemDeep(container, fn, depth)
+            depth = depth or 0
+            if not container or depth > 4 then return end
+            local ok2, list = pcall(function() return container:getItems() end)
+            if not ok2 or not list then return end
+            for i = 0, list:size() - 1 do
+                local it = list:get(i)
+                if it then
+                    fn(it)
+                    local isBag = false
+                    pcall(function() isBag = it:IsInventoryContainer() == true end)
+                    if isBag then
+                        local sub = nil
+                        pcall(function() sub = it:getInventory() end)
+                        if sub then forEachItemDeep(sub, fn, depth + 1) end
+                    end
+                end
+            end
+        end
+        -- 判断背包物品是否匹配目标消耗项（比较脚本标识 fullType）
         local function matchesCost(it, cost)
             if not it then return false end
             return it:getFullType() == cost.fullType
         end
-        -- 统计背包中匹配指定消耗项的物品数量
+        -- 统计背包中匹配指定消耗项的物品数量（含嵌套背包）
         local function countOwned(cost)
             local n = 0
-            for i = 0, items:size() - 1 do
-                local it = items:get(i)
-                if it and inv:contains(it) and matchesCost(it, cost) then
-                    n = n + 1
-                end
-            end
+            forEachItemDeep(inv, function(it)
+                if matchesCost(it, cost) then n = n + 1 end
+            end)
             return n
+        end
+        -- 按实例 ID 查找物品（含嵌套背包）
+        local function findItemById(id)
+            local found = nil
+            forEachItemDeep(inv, function(it)
+                if not found then
+                    local iid = nil
+                    pcall(function() iid = it:getID() end)
+                    if iid == id then found = it end
+                end
+            end)
+            return found
         end
 
         -- 资格门槛校验：requiredItems 未满足则拒绝兑换
@@ -694,20 +723,108 @@ Server.onClientCommand = function(module, command, player, args)
             end
         end
 
-        -- 扣除消耗物品（记录以便失败时回滚）
-        local removedItems = {}
-        for _, cost in ipairs(costs) do
-            local toRemove = cost.count * batchCount
-            for i = items:size() - 1, 0, -1 do
-                if toRemove <= 0 then break end
-                local it = items:get(i)
-                if it and inv:contains(it) and matchesCost(it, cost) then
-                    inv:Remove(it)
-                    sendRemoveItemFromContainer(inv, it)
-                    removedItems[#removedItems + 1] = it
-                    toRemove = toRemove - 1
+        -- 解析待扣除的「物品实例」列表。
+        -- 首选：客户端选定的实例 ID（能精确区分改名/未改名实例，杜绝扣错）。
+        -- 回退（旧客户端未带 costIds）：服务端按 fullType 自行挑选。
+        local toDeduct = {}
+        local deductErr = nil
+
+        if args.costIds and #args.costIds > 0 then
+            -- 收集并去重（重复 ID 直接忽略，由随后数量校验拦截）
+            local seen = {}
+            for _, id in ipairs(args.costIds) do
+                local key = tostring(id)
+                if not seen[key] then
+                    seen[key] = true
+                    local it = findItemById(tonumber(id) or id)
+                    if it then toDeduct[#toDeduct + 1] = it end
                 end
             end
+            -- 安全校验：提交的实例「数量」与「品类」必须恰好满足全部消耗项，
+            -- 否则拒绝（防止篡改客户端少扣/顶替却照发奖励）
+            local expected = 0
+            for _, cost in ipairs(costs) do
+                expected = expected + cost.count * batchCount
+            end
+            if #toDeduct ~= expected then
+                deductErr = "Missing required items in backpack!"
+            else
+                local used = {}
+                for _, cost in ipairs(costs) do
+                    local remain = cost.count * batchCount
+                    for idx, it in ipairs(toDeduct) do
+                        if remain <= 0 then break end
+                        if not used[idx] and matchesCost(it, cost) then
+                            used[idx] = true
+                            remain = remain - 1
+                        end
+                    end
+                    if remain > 0 then
+                        deductErr = "Missing required items in backpack!"
+                        break
+                    end
+                end
+            end
+        else
+            -- 回退：自行挑选（与客户端 ResolveCostInstances 逻辑一致）
+            local all = {}
+            forEachItemDeep(inv, function(it) all[#all + 1] = it end)
+            local taken = {}
+            for _, cost in ipairs(costs) do
+                local need = cost.count * batchCount
+                for _, it in ipairs(all) do
+                    if need <= 0 then break end
+                    local iid = nil
+                    pcall(function() iid = it:getID() end)
+                    if iid and not taken[iid] and matchesCost(it, cost) then
+                        taken[iid] = true
+                        toDeduct[#toDeduct + 1] = it
+                        need = need - 1
+                    end
+                end
+                if need > 0 then
+                    deductErr = "Missing required items in backpack!"
+                    break
+                end
+            end
+        end
+
+        if deductErr then
+            sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
+                action = "failed", reason = deductErr,
+            })
+            return
+        end
+
+        -- 执行扣除（记录以便失败时回滚）
+        local removedItems = {}
+        local removeFailed = false
+        for _, it in ipairs(toDeduct) do
+            local c = nil
+            pcall(function() c = it:getContainer() end)
+            if not c then
+                removeFailed = true
+                break
+            end
+            c:Remove(it)
+            sendRemoveItemFromContainer(c, it)
+            removedItems[#removedItems + 1] = it
+        end
+
+        if removeFailed then
+            -- 回滚已扣除的消耗物品（尽量归还）
+            for _, r in ipairs(removedItems) do
+                local back = inv:AddItem(r:getFullType())
+                if back then
+                    local dn = r:getDisplayName()
+                    if dn and #dn > 0 then back:setName(dn) end
+                    sendAddItemToContainer(inv, back)
+                end
+            end
+            sendServerCommand(player, MODULE, Shared.COMMANDS.DELIVERY_RESULT, {
+                action = "failed", reason = "Missing required items in backpack!",
+            })
+            return
         end
 
         -- 发放奖励（N 倍），若任意一件添加失败则整体回滚
@@ -717,8 +834,10 @@ Server.onClientCommand = function(module, command, player, args)
             for _ = 1, reward.count * batchCount do
                 local newItem = inv:AddItem(reward.fullType)
                 if newItem then
-                    if reward.displayName and #reward.displayName > 0 then
-                        newItem:setName(reward.displayName)
+                    local want = reward.displayName or ""
+                    -- 仅当名字确实变了才改名，避免把普通奖励误标为自定义命名。
+                    if #want > 0 and want ~= newItem:getDisplayName() then
+                        newItem:setName(want)
                     end
                     sendAddItemToContainer(inv, newItem)
                     grantedItems[#grantedItems + 1] = newItem
