@@ -18,10 +18,13 @@ EventTriggerShared.DELIVERY_INDEX_FILE = EventTriggerShared.DELIVERY_DIR .. "/in
 EventTriggerShared.MAX_TRIGGERS = 200
 
 -- 交付点数量上限
-EventTriggerShared.MAX_DELIVERY_POINTS = 100
+EventTriggerShared.MAX_DELIVERY_POINTS = 200
 
 -- 每个触发器保留的历史记录条数上限
-EventTriggerShared.MAX_HISTORY_PER_TRIGGER = 50
+EventTriggerShared.MAX_HISTORY_PER_TRIGGER = 200
+
+-- 每个交付点保留的历史记录条数上限
+EventTriggerShared.MAX_HISTORY_PER_DELIVERY = 200
 
 -- ============================================================
 -- 指令协议（客户端 <-> 服务器）

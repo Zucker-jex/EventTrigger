@@ -871,6 +871,15 @@ Server.onClientCommand = function(module, command, player, args)
             playerId = pid, timestamp = os.time(),
             timeStr = os.date("!%Y-%m-%d %H:%M:%S"),  -- UTC 时间字符串
         })
+        -- 裁剪历史：只保留最近 N 条，防止 JSON 无界膨胀
+        local maxHist = Shared.MAX_HISTORY_PER_DELIVERY or 100
+        if #dp.triggeredBy > maxHist then
+            local keep = {}
+            for i = #dp.triggeredBy - maxHist + 1, #dp.triggeredBy do
+                keep[#keep + 1] = dp.triggeredBy[i]
+            end
+            dp.triggeredBy = keep
+        end
 
         -- 更新玩家冷却时间戳
         if not Shared.isCooldownZero(cooldown) then
