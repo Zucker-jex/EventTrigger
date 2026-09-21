@@ -2953,6 +2953,32 @@ function EventTriggerDeliveryHistUI:create()
     self.closeBtn:initialise()
     self:addChild(self.closeBtn)
 
+    -- 倒排触发历史：最后触发的排最前（保留原始序号用于显示）
+    local trigBy = (self.dp and self.dp.triggeredBy) or {}
+    self.history = {}
+    for i = #trigBy, 1, -1 do
+        self.history[#self.history + 1] = { entry = trigBy[i], num = i }
+    end
+    self.histPage = 0
+    self.histPageSize = 10
+    self.histTotalPages = math.max(1, math.ceil(#self.history / self.histPageSize))
+
+    self:rebuildLines()
+
+    -- 翻页按钮（仅多页时显示）
+    if self.histTotalPages > 1 then
+        self.prevBtn = ISButton:new(14, self.height - 40, 36, 26, "<", self, EventTriggerDeliveryHistUI.onHistPrev)
+        self.prevBtn:initialise()
+        self:addChild(self.prevBtn)
+
+        self.nextBtn = ISButton:new(54, self.height - 40, 36, 26, ">", self, EventTriggerDeliveryHistUI.onHistNext)
+        self.nextBtn:initialise()
+        self:addChild(self.nextBtn)
+    end
+end
+
+-- 重建显示行（静态信息 + 当前页历史）；翻页时调用。
+function EventTriggerDeliveryHistUI:rebuildLines()
     self.lines = {}
     local dp = self.dp
     local F = UIFont.Small
@@ -2961,95 +2987,100 @@ function EventTriggerDeliveryHistUI:create()
     local x = 14
     local y = 28 + math.floor(18 * EventTrigger.US)
 
+    local function add(text, color, indent)
+        self.lines[#self.lines + 1] = { x = x + (indent or 0), y = y, text = text, color = color }
+        y = y + rowH
+    end
+
     if not dp then
-        self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_DeliveryNotFound"), color = {1,0.5,0.5} }
+        add(getText("UI_ET_Hist_DeliveryNotFound"), {1,0.5,0.5})
         return
     end
 
-    self.lines[#self.lines + 1] = { x = x, y = y, text = fitText(getText("UI_ET_Hist_Position", dp.x, dp.y, dp.z), F, maxW), color = {0.5,0.8,1} }
-    y = y + rowH
-    self.lines[#self.lines + 1] = { x = x, y = y, text = fitText(getText("UI_ET_Hist_Hint", (dp.hintText or "")), F, maxW - 60), color = {0.8,0.8,1} }
-    y = y + rowH
-    self.lines[#self.lines + 1] = { x = x, y = y, text = fitText(getText("UI_ET_Hist_Creator", (dp.creator or "?")), F, maxW - 80), color = {0.8,0.8,0.5} }
-    y = y + rowH
+    add(fitText(getText("UI_ET_Hist_Position", dp.x, dp.y, dp.z), F, maxW), {0.5,0.8,1})
+    add(fitText(getText("UI_ET_Hist_Hint", (dp.hintText or "")), F, maxW - 60), {0.8,0.8,1})
+    add(fitText(getText("UI_ET_Hist_Creator", (dp.creator or "?")), F, maxW - 80), {0.8,0.8,0.5})
     local statusStr = (dp.triggerCount or 0) > 0 and getText("UI_ET_Dlv_Completed") or getText("UI_ET_Dlv_Ready")
-    self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_RangeStatus", (dp.range or 3), statusStr), color = {1,1,1} }
-    y = y + rowH
+    add(getText("UI_ET_Hist_RangeStatus", (dp.range or 3), statusStr), {1,1,1})
 
     -- 匹配模式与冷却
     local modeStr = (dp.matchMode == "any") and getText("UI_ET_Dlv_Any") or getText("UI_ET_Dlv_All")
-    local modeText = getText("UI_ET_Dlv_MatchModeLabel", modeStr)
-    self.lines[#self.lines + 1] = { x = x, y = y, text = modeText, color = {0.9,0.9,0.3} }
-    y = y + rowH
+    add(getText("UI_ET_Dlv_MatchModeLabel", modeStr), {0.9,0.9,0.3})
 
     local cd = dp.cooldown or {}
     if not EventTrigger.isCooldownZero(cd) then
-        local cdText = getText("UI_ET_Dlv_CooldownLabel", EventTrigger.formatCooldown(cd))
-        self.lines[#self.lines + 1] = { x = x, y = y, text = cdText, color = {0.7,0.9,0.7} }
-        y = y + rowH
+        add(getText("UI_ET_Dlv_CooldownLabel", EventTrigger.formatCooldown(cd)), {0.7,0.9,0.7})
     end
 
     if dp.maxPlayers and dp.maxPlayers > 0 then
-        self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_MaxPlayers", dp.maxPlayers), color = {0.8,0.8,1} }
-        y = y + rowH
+        add(getText("UI_ET_Hist_MaxPlayers", dp.maxPlayers), {0.8,0.8,1})
     end
     if dp.maxPerPlayer and dp.maxPerPlayer > 0 then
-        self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_MaxPerPlayer", dp.maxPerPlayer), color = {0.8,0.8,1} }
-        y = y + rowH
+        add(getText("UI_ET_Hist_MaxPerPlayer", dp.maxPerPlayer), {0.8,0.8,1})
     end
 
     y = y + 6
 
     -- 需求物品
-    self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_RequiredItems"), color = {0.9,0.7,0.3} }
-    y = y + rowH
+    add(getText("UI_ET_Hist_RequiredItems"), {0.9,0.7,0.3})
     local reqItems = dp.requiredItems or {}
     if #reqItems == 0 then
-        self.lines[#self.lines + 1] = { x = x + 8, y = y, text = getText("UI_ET_Inv_None"), color = {0.5,0.5,0.5} }
-        y = y + rowH
+        add(getText("UI_ET_Inv_None"), {0.5,0.5,0.5}, 8)
     else
         for _, item in ipairs(reqItems) do
             -- 需求物品仅作门槛（不扣除），不再标注"移除 / 仅检查"
-            local txt = fitText(item.displayName .. " x" .. tostring(item.count) .. "  [" .. item.fullType .. "]", F, maxW - 20)
-            self.lines[#self.lines + 1] = { x = x + 8, y = y, text = txt, color = {1,1,1} }
-            y = y + rowH
+            add(fitText(item.displayName .. " x" .. tostring(item.count) .. "  [" .. item.fullType .. "]", F, maxW - 20), {1,1,1}, 8)
         end
     end
 
     y = y + 6
-    self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_RewardItems"), color = {0.3,0.9,0.5} }
-    y = y + rowH
+    add(getText("UI_ET_Hist_RewardItems"), {0.3,0.9,0.5})
     local rewItems = dp.rewardItems or {}
     if #rewItems == 0 then
-        self.lines[#self.lines + 1] = { x = x + 8, y = y, text = getText("UI_ET_Inv_None"), color = {0.5,0.5,0.5} }
-        y = y + rowH
+        add(getText("UI_ET_Inv_None"), {0.5,0.5,0.5}, 8)
     else
         for _, item in ipairs(rewItems) do
-            local txt = fitText(item.displayName .. " x" .. tostring(item.count) .. "  [" .. item.fullType .. "]", F, maxW - 20)
-            self.lines[#self.lines + 1] = { x = x + 8, y = y, text = txt, color = {1,1,1} }
-            y = y + rowH
+            add(fitText(item.displayName .. " x" .. tostring(item.count) .. "  [" .. item.fullType .. "]", F, maxW - 20), {1,1,1}, 8)
         end
     end
 
-    -- 触发历史
+    -- 触发历史（倒排 + 分页）
     y = y + 6
-    local trigBy = dp.triggeredBy or {}
-    self.lines[#self.lines + 1] = { x = x, y = y, text = getText("UI_ET_Hist_TotalDeliveries", #trigBy), color = {1,1,1} }
-    y = y + rowH
-    for i, entry in ipairs(trigBy) do
+    add(getText("UI_ET_Hist_TotalDeliveries", #self.history), {1,1,1})
+
+    local page = self.histPage or 0
+    local size = self.histPageSize or 8
+    local startIdx = page * size
+    local endIdx = math.min(#self.history, startIdx + size)
+    for i = startIdx, endIdx - 1 do
+        local h = self.history[i + 1]
+        local e = h.entry
         local pId, tStr
-        if type(entry) == "table" then
-            pId = entry.playerId or "?"
-            tStr = entry.timeStr or ""
+        if type(e) == "table" then
+            pId = e.playerId or "?"
+            tStr = e.timeStr or ""
         else
-            pId = tostring(entry)
+            pId = tostring(e)
             tStr = ""
         end
-        local line = i .. ". " .. pId
+        local line = h.num .. ". " .. pId
         if #tStr > 0 then line = line .. "  [" .. tStr .. "]" end
-        self.lines[#self.lines + 1] = { x = x + 8, y = y, text = fitText(line, F, maxW - 20), color = {0.8,0.9,1} }
-        y = y + rowH
-        if y > self.height - 30 then break end
+        add(fitText(line, F, maxW - 20), {0.8,0.9,1}, 8)
+        if y > self.height - 50 then break end
+    end
+end
+
+function EventTriggerDeliveryHistUI:onHistPrev()
+    if self.histPage > 0 then
+        self.histPage = self.histPage - 1
+        self:rebuildLines()
+    end
+end
+
+function EventTriggerDeliveryHistUI:onHistNext()
+    if self.histPage < self.histTotalPages - 1 then
+        self.histPage = self.histPage + 1
+        self:rebuildLines()
     end
 end
 
@@ -3099,6 +3130,9 @@ function EventTriggerDeliveryHistUI:prerender()
     self:drawTextCentre(getText("UI_ET_Hist_DeliveryDetails"), self.width / 2, 7, 1, 1, 1, 1, UIFont.Medium)
     for _, line in ipairs(self.lines) do
         self:drawText(line.text, line.x, line.y, line.color[1], line.color[2], line.color[3], 1, UIFont.Small)
+    end
+    if self.histTotalPages and self.histTotalPages > 1 then
+        self:drawText(getText("UI_ET_Inv_Page", (self.histPage or 0) + 1, self.histTotalPages), 100, self.height - 36, 1, 1, 1, 1, UIFont.Small)
     end
 end
 
