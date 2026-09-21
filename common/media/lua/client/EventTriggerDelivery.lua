@@ -2963,21 +2963,17 @@ function EventTriggerDeliveryHistUI:create()
     self.histPageSize = 10
     self.histTotalPages = math.max(1, math.ceil(#self.history / self.histPageSize))
 
-    self:rebuildLines()
-
-    -- 翻页按钮（仅多页时显示）
-    if self.histTotalPages > 1 then
-        self.prevBtn = ISButton:new(14, self.height - 40, 36, 26, "<", self, EventTriggerDeliveryHistUI.onHistPrev)
-        self.prevBtn:initialise()
-        self:addChild(self.prevBtn)
-
-        self.nextBtn = ISButton:new(54, self.height - 40, 36, 26, ">", self, EventTriggerDeliveryHistUI.onHistNext)
-        self.nextBtn:initialise()
-        self:addChild(self.nextBtn)
-    end
+    self:rebuild()
 end
 
--- 重建显示行（静态信息 + 当前页历史）；翻页时调用。
+-- 重绘全部内容 + 自适应高度 + 重排底部翻页按钮。
+function EventTriggerDeliveryHistUI:rebuild()
+    self:rebuildLines()
+    self:layoutFooter()
+end
+
+-- 重建显示行（静态信息 + 当前页历史）；内容不再被窗口高度截断。
+-- 完成后按实际内容高度自适应调整窗口高度。
 function EventTriggerDeliveryHistUI:rebuildLines()
     self.lines = {}
     local dp = self.dp
@@ -2994,6 +2990,7 @@ function EventTriggerDeliveryHistUI:rebuildLines()
 
     if not dp then
         add(getText("UI_ET_Hist_DeliveryNotFound"), {1,0.5,0.5})
+        self:applyContentHeight(y, false)
         return
     end
 
@@ -3044,12 +3041,12 @@ function EventTriggerDeliveryHistUI:rebuildLines()
         end
     end
 
-    -- 触发历史（倒排 + 分页）
+    -- 触发历史（倒排 + 分页，完整显示当前页，不截断）
     y = y + 6
     add(getText("UI_ET_Hist_TotalDeliveries", #self.history), {1,1,1})
 
     local page = self.histPage or 0
-    local size = self.histPageSize or 8
+    local size = self.histPageSize or 10
     local startIdx = page * size
     local endIdx = math.min(#self.history, startIdx + size)
     for i = startIdx, endIdx - 1 do
@@ -3066,21 +3063,58 @@ function EventTriggerDeliveryHistUI:rebuildLines()
         local line = h.num .. ". " .. pId
         if #tStr > 0 then line = line .. "  [" .. tStr .. "]" end
         add(fitText(line, F, maxW - 20), {0.8,0.9,1}, 8)
-        if y > self.height - 50 then break end
+    end
+
+    self:applyContentHeight(y, self.histTotalPages > 1)
+end
+
+-- 根据内容底部 y 自适应调整窗口高度（保持顶部位置不变，向下伸缩）。
+function EventTriggerDeliveryHistUI:applyContentHeight(contentBottom, hasFooter)
+    local bottomPad = hasFooter and 46 or 16
+    local newH = contentBottom + bottomPad
+    local maxH = math.floor(getCore():getScreenHeight() * 0.92)
+    if newH > maxH then newH = maxH end
+    local minH = 140
+    if newH < minH then newH = minH end
+    self.height = newH
+    self:setHeight(newH)
+end
+
+-- 重排底部翻页按钮（位置依赖当前高度）。
+function EventTriggerDeliveryHistUI:layoutFooter()
+    if self.prevBtn then
+        self.prevBtn:removeFromUIManager()
+        if self.removeChild then self:removeChild(self.prevBtn) end
+        self.prevBtn = nil
+    end
+    if self.nextBtn then
+        self.nextBtn:removeFromUIManager()
+        if self.removeChild then self:removeChild(self.nextBtn) end
+        self.nextBtn = nil
+    end
+
+    if self.histTotalPages > 1 then
+        self.prevBtn = ISButton:new(14, self.height - 38, 36, 26, "<", self, EventTriggerDeliveryHistUI.onHistPrev)
+        self.prevBtn:initialise()
+        self:addChild(self.prevBtn)
+
+        self.nextBtn = ISButton:new(54, self.height - 38, 36, 26, ">", self, EventTriggerDeliveryHistUI.onHistNext)
+        self.nextBtn:initialise()
+        self:addChild(self.nextBtn)
     end
 end
 
 function EventTriggerDeliveryHistUI:onHistPrev()
     if self.histPage > 0 then
         self.histPage = self.histPage - 1
-        self:rebuildLines()
+        self:rebuild()
     end
 end
 
 function EventTriggerDeliveryHistUI:onHistNext()
     if self.histPage < self.histTotalPages - 1 then
         self.histPage = self.histPage + 1
-        self:rebuildLines()
+        self:rebuild()
     end
 end
 
@@ -3138,7 +3172,8 @@ end
 
 function EventTriggerDeliveryHistUI:new(dp)
     local w = EventTrigger.fitW(640)
-    local h = EventTrigger.fitH(520)
+    -- 初始高度先用一个较小的临时值，实际高度会在 rebuildLines 里按内容自适应
+    local h = EventTrigger.fitH(200)
     local sw = getCore():getScreenWidth()
     local sh = getCore():getScreenHeight()
     local x, y = (sw - w) / 2, (sh - h) / 2
