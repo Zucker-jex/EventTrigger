@@ -296,6 +296,37 @@ function EventTrigger.Delivery.CheckCooldown(player, deliveryData)
 end
 
 -- ============================================================
+-- 判断玩家是否满足交付点的需求物品门槛。
+--   无需求物品 → 恒满足；
+--   有需求物品 → 按 matchMode（all=全部满足 / any=任一满足）检查背包持有量。
+-- 仅作门槛判定，不触碰背包、不解析消耗实例。
+-- ============================================================
+function EventTrigger.Delivery.PlayerQualifies(player, dp)
+    if not player or not dp then return true end
+    local reqItems = dp.requiredItems or {}
+    if #reqItems == 0 then return true end
+    local inv = player:getInventory()
+    if not inv then return false end
+    local counts = EventTrigger.Delivery.CountItems(inv, reqItems)
+    local matchMode = dp.matchMode or "all"
+    if matchMode == "any" then
+        for _, req in ipairs(reqItems) do
+            if (counts[itemKey(req.fullType, req.customName)] or 0) >= (req.count or 1) then
+                return true
+            end
+        end
+        return false
+    else
+        for _, req in ipairs(reqItems) do
+            if (counts[itemKey(req.fullType, req.customName)] or 0) < (req.count or 1) then
+                return false
+            end
+        end
+        return true
+    end
+end
+
+-- ============================================================
 -- 交付点检测（触发点法：状态存储在 dp 对象上）
 -- ============================================================
 EventTrigger.Delivery._activePrompt = {}   -- playerKey -> dpId（同一时刻仅一个 UI，玩家全局）
@@ -346,11 +377,15 @@ function EventTrigger.Delivery.CheckPlayerInRange(player)
                         end
                     end
                     if canTrigger then
-                        dp._dlvPrompted[playerKey] = true
-                        EventTrigger.Delivery._activePrompt[playerKey] = dp.id
-                        EventTrigger.Delivery._pendingDpId[playerKey] = dp.id
-                        HaloTextHelper.addGoodText(player, dp.hintText or "Delivery Point")
-                        EventTrigger.Delivery.ShowDeliveryPrompt(dp)
+                        -- 门槛预检：无需求物品或持有需求物品时才弹窗；
+                        -- 否则保持静默（不置 _dlvPrompted，便于玩家之后取得物品、仍在范围内时可再触发）
+                        if EventTrigger.Delivery.PlayerQualifies(player, dp) then
+                            dp._dlvPrompted[playerKey] = true
+                            EventTrigger.Delivery._activePrompt[playerKey] = dp.id
+                            EventTrigger.Delivery._pendingDpId[playerKey] = dp.id
+                            HaloTextHelper.addGoodText(player, dp.hintText or "Delivery Point")
+                            EventTrigger.Delivery.ShowDeliveryPrompt(dp)
+                        end
                     end
                 end
             else
